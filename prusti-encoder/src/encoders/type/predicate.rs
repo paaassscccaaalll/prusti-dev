@@ -19,6 +19,9 @@ use super::{
     snapshot::SnapshotEnc,
 };
 
+use crate::encoders::spec;
+use prusti_interface::specs::typed::DefSpecificationMap;
+
 /// Takes a `MostGenericTy` and returns various Viper predicates and functions for
 /// working with the type.
 pub struct PredicateEnc;
@@ -409,6 +412,43 @@ impl TaskEncoder for PredicateEnc {
         let snap = deps.require_local::<SnapshotEnc>(*task_key)?;
         let generic_output_ref = deps.require_ref::<GenericEnc>(())?;
 
+
+        let type_is_trusted = spec::with_def_spec(|def_spec: &DefSpecificationMap| {
+
+            if let TyKind::Adt(adt_def, substs) = task_key.kind() {
+                let type_def_id = adt_def.did();
+                
+                println!("  - ADT DefId: {:?}", type_def_id);
+                println!("  - ADT Substs: {:?}", substs);
+
+                let type_spec_option = def_spec.get_type_spec(&type_def_id);
+                println!(
+                    "  - Found type spec for {:?}: {}",
+                    type_def_id,
+                    type_spec_option.is_some()
+                );
+                if let Some(type_spec) = type_spec_option {
+                    println!("  - Type Specification: {:?}", type_spec);
+                    println!("    - Trusted field: {:?}", type_spec.trusted);
+                }
+                
+
+                type_spec_option
+                    .map(|type_spec| type_spec.trusted.extract_inherit().unwrap_or(false))
+                    .unwrap_or(false)
+            } else {
+                println!("  - Not an ADT, kind: {:?}", task_key.kind());
+                false
+            }
+        });
+
+
+        if type_is_trusted{
+            println!("PredicateEnc: type is trusted wohooo");
+        }else{
+            println!("PredicateEnc: type is NOT trusted");
+        }
+
         if let TyKind::Param(..) = task_key.kind() {
             let method_assign = vir::with_vcx(|vcx| {
                 MethodIdent::new(
@@ -460,6 +500,12 @@ impl TaskEncoder for PredicateEnc {
         if let Some(res) = vir::with_vcx(|vcx| {
             let mut builder = PredicateBuilder::new(vcx);
 
+            if let TyKind::Adt(adt_def, _) = task_key.kind() {
+                let type_def_id = adt_def.did();
+                let adt_name = vcx.tcx().def_path_str(type_def_id);
+                println!("(Later)  Processing ADT: {} (DefId: {:?})", adt_name, type_def_id);
+            }
+            
             let base_name = get_vir_base_name_kind(task_key.kind(), vcx);
             builder.set_name(&base_name);
 
