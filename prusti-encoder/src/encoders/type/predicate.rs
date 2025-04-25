@@ -413,7 +413,7 @@ impl TaskEncoder for PredicateEnc {
         let generic_output_ref = deps.require_ref::<GenericEnc>(())?;
 
 
-        let type_is_trusted = spec::with_def_spec(|def_spec: &DefSpecificationMap| {
+        /* let type_is_trusted = spec::with_def_spec(|def_spec: &DefSpecificationMap| {
 
             if let TyKind::Adt(adt_def, substs) = task_key.kind() {
                 let type_def_id = adt_def.did();
@@ -447,7 +447,7 @@ impl TaskEncoder for PredicateEnc {
             println!("PredicateEnc: type is trusted wohooo");
         }else{
             println!("PredicateEnc: type is NOT trusted");
-        }
+        } */
 
         if let TyKind::Param(..) = task_key.kind() {
             let method_assign = vir::with_vcx(|vcx| {
@@ -471,6 +471,7 @@ impl TaskEncoder for PredicateEnc {
                     specifics: PredicateEncData::Param,
                     generics: &[],
                     ref_to_indirect_pred: None,
+                    
                 },
             )?;
             let dep = deps.require_local::<GenericEnc>(())?;
@@ -505,7 +506,7 @@ impl TaskEncoder for PredicateEnc {
                 let adt_name = vcx.tcx().def_path_str(type_def_id);
                 println!("(Later)  Processing ADT: {} (DefId: {:?})", adt_name, type_def_id);
             }
-            
+
             let base_name = get_vir_base_name_kind(task_key.kind(), vcx);
             builder.set_name(&base_name);
 
