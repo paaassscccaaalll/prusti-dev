@@ -9,6 +9,7 @@ use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use crate::encoders::{
     rust_ty_predicates::{RustTyPredicatesEnc, RustTyPredicatesEncOutputRef},
     PredicateEncOutputRef,
+    utils,
 };
 
 pub struct MirLocalDefEnc;
@@ -73,10 +74,7 @@ impl TaskEncoder for MirLocalDefEnc {
             }
         }
 
-        let trusted = crate::encoders::with_proc_spec(def_id, |def_spec| {
-            def_spec.trusted.extract_inherit().unwrap_or_default()
-        })
-        .unwrap_or_default();
+        let trusted = utils::is_def_id_trusted(def_id);
 
         vir::with_vcx(|vcx| {
             let local_def_id = def_id.as_local().filter(|_| !trusted);

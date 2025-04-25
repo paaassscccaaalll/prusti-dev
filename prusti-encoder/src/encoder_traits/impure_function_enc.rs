@@ -4,7 +4,8 @@ use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{MethodIdent, UnknownArity, ViperIdent};
 
 use crate::encoders::{
-    lifted::func_def_ty_params::LiftedTyParamsEnc, ImpureEncVisitor, MirImpureEnc, MirLocalDefEnc, MirSpecEnc, WandEnc, WandEncTask
+    lifted::func_def_ty_params::LiftedTyParamsEnc, ImpureEncVisitor, MirImpureEnc, MirLocalDefEnc, MirSpecEnc, WandEnc, WandEncTask,
+    utils,
 };
 
 use super::function_enc::FunctionEnc;
@@ -45,10 +46,7 @@ where
     ) -> Result<ImpureFunctionEncOutput<'vir>, EncodeFullError<'vir, Self>> {
         let def_id = Self::get_def_id(&task_key);
         let caller_def_id = Self::get_caller_def_id(&task_key);
-        let trusted = crate::encoders::with_proc_spec(def_id, |def_spec| {
-            def_spec.trusted.extract_inherit().unwrap_or_default()
-        })
-        .unwrap_or_default();
+        let trusted = utils::is_def_id_trusted(def_id);
         vir::with_vcx(|vcx| {
             use mir::visit::Visitor;
 

@@ -9,6 +9,7 @@ use crate::encoders::{
         ty::{EncodeGenericsAsLifted, LiftedTy, LiftedTyEnc},
     },
     most_generic_ty::extract_type_params,
+    utils,
     GenericEnc, MirLocalDefEnc, MirPureEnc, MirPureEncTask, MirSpecEnc, PureKind,
 };
 
@@ -86,10 +87,7 @@ where
     ) -> Result<MirFunctionEncOutput<'vir>, EncodeFullError<'vir, Self>> {
         let def_id = Self::get_def_id(&task_key);
         let caller_def_id = Self::get_caller_def_id(&task_key);
-        let trusted = crate::encoders::with_proc_spec(def_id, |def_spec| {
-            def_spec.trusted.extract_inherit().unwrap_or_default()
-        })
-        .unwrap_or_default();
+        let trusted = utils::is_def_id_trusted(def_id);
         vir::with_vcx(|vcx| {
             let substs = Self::get_substs(vcx, &task_key);
             let local_defs =
