@@ -75,10 +75,10 @@ impl TaskEncoder for MirLocalDefEnc {
         }
 
         let trusted = utils::is_def_id_trusted(def_id);
-
+        println!("(local_def.rs)  MirLocalDefEnc: def_id: {:?}, trusted: {}", def_id, trusted);
         vir::with_vcx(|vcx| {
             let local_def_id = def_id.as_local().filter(|_| !trusted);
-            let data = if let Some(local_def_id) = def_id.as_local() {
+            let data = if let Some(local_def_id) = local_def_id {
                 let body = vcx
                     .body_mut()
                     .get_impure_fn_body(local_def_id, substs, caller_def_id);
