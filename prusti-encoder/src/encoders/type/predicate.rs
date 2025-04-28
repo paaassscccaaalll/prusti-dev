@@ -7,7 +7,7 @@ use vir::{
     BinaryArity, CallableIdent, FunctionIdent, MethodIdent, NullaryArity, PredicateIdent, TypeData, UnaryArity, UnknownArity, VirCtxt
 };
 
-use crate::encoders::GenericEnc;
+use crate::encoders::{utils::is_def_id_trusted, GenericEnc};
 use crate::encoders::spec;
 use crate::encoders::utils;
 use prusti_interface::specs::typed::DefSpecificationMap;
@@ -467,7 +467,7 @@ impl TaskEncoder for PredicateEnc {
             if let TyKind::Adt(adt_def, _) = task_key.kind() {
                 let type_def_id = adt_def.did();
                 let adt_name = vcx.tcx().def_path_str(type_def_id);
-                println!("(Later)  Processing ADT: {} (DefId: {:?})", adt_name, type_def_id);
+                println!("Processing ADT: {} (DefId: {:?}) Trusted: {}", adt_name, type_def_id, is_def_id_trusted(type_def_id) );
             }
 
             let base_name = get_vir_base_name_kind(task_key.kind(), vcx);
@@ -532,7 +532,7 @@ impl TaskEncoder for PredicateEnc {
                 | TyKind::Int(_)
                 | TyKind::Uint(_)
                 | TyKind::Float(_) => super::kinds::primitive::predicate(*task_key, snap.clone(), deps, &mut builder)?,
-                TyKind::Adt(..) => super::kinds::adt::predicate(*task_key, snap.clone(), deps, &generic_decls, &generic_exprs, &mut builder)?,
+                TyKind::Adt(..) => super::kinds::adt::predicate(*task_key, snap.clone(), deps, &generic_decls, &generic_exprs, &mut builder, )?,
                 TyKind::Ref(_, _, ty::Mutability::Not) => super::kinds::immref::predicate(*task_key, snap.clone(), deps, &generic_decls, &generic_exprs, &mut builder)?,
                 TyKind::Ref(_, _, ty::Mutability::Mut) => super::kinds::mutref::predicate(*task_key, snap.clone(), deps, /*&generic_decls, &generic_exprs, */&mut builder)?,
                 TyKind::Never => (super::kinds::never::predicate(*task_key, snap.clone(), deps, /*&generic_decls, &generic_exprs, */&mut builder)?, None),
