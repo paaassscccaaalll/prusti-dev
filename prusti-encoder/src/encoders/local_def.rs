@@ -74,7 +74,7 @@ impl TaskEncoder for MirLocalDefEnc {
             }
         }
 
-        let trusted = utils::is_def_id_trusted(def_id);
+        let trusted = utils::is_function_trusted(def_id);
         println!("(local_def.rs)  MirLocalDefEnc: def_id: {:?}, trusted: {}", def_id, trusted);
         vir::with_vcx(|vcx| {
             let local_def_id = def_id.as_local().filter(|_| !trusted);

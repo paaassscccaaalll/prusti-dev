@@ -169,7 +169,7 @@ pub(crate) fn predicate<'vir>(
     let ref_self_decl = builder.vcx.mk_local_decl_local(ref_self);
     let ref_self_ex = builder.vcx.mk_local_ex_local(ref_self);
     let def_id = adt.did();
-    let trusted = utils::is_def_id_trusted(def_id);
+    let trusted = utils::is_adt_trusted(def_id);
 
     if trusted {
         match adt.adt_kind() {
@@ -183,7 +183,7 @@ pub(crate) fn predicate<'vir>(
                     &[ref_self_decl].into_iter()
                         .chain(generic_decls.iter().cloned())
                         .collect::<Vec<_>>(),
-                    Some(vir::expr! { true }),
+                    Some( vir::expr! { true }),
                 );
                 
                 // also emptry body 
