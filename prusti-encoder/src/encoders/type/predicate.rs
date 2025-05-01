@@ -7,7 +7,7 @@ use vir::{
     BinaryArity, CallableIdent, FunctionIdent, MethodIdent, NullaryArity, PredicateIdent, TypeData, UnaryArity, UnknownArity, VirCtxt
 };
 
-use crate::encoders::{utils::is_def_id_trusted, GenericEnc};
+use crate::encoders::{utils::is_function_trusted, GenericEnc, utils::is_adt_trusted};
 use crate::encoders::spec;
 use crate::encoders::utils;
 use prusti_interface::specs::typed::DefSpecificationMap;
@@ -71,6 +71,7 @@ pub struct PredicateEncDataMutRef<'vir> {
 #[derive(Clone, Copy, Debug)]
 pub enum PredicateEncData<'vir> {
     Never,
+    Trusted,
     Primitive(DomainDataPrim<'vir>),
     // structs, tuples
     StructLike(PredicateEncDataStruct<'vir>),
@@ -168,6 +169,10 @@ impl<'vir> PredicateEncOutputRef<'vir> {
     }
     pub fn get_variant_any(&self, vid: abi::VariantIdx) -> &PredicateEncDataStruct<'vir> {
         match &self.specifics {
+            // not sure about this...
+            PredicateEncData::Trusted => ,//not sure if this is the right place to handle this or if it should be handled in the mir_impure.rs mir_pure.rs
+
+
             PredicateEncData::StructLike(s) => {
                 assert_eq!(vid, abi::FIRST_VARIANT);
                 s
@@ -467,7 +472,7 @@ impl TaskEncoder for PredicateEnc {
             if let TyKind::Adt(adt_def, _) = task_key.kind() {
                 let type_def_id = adt_def.did();
                 let adt_name = vcx.tcx().def_path_str(type_def_id);
-                println!("Processing ADT: {} (DefId: {:?}) Trusted: {}", adt_name, type_def_id, is_def_id_trusted(type_def_id) );
+                println!("Processing ADT: {} (DefId: {:?}) Trusted: {}", adt_name, type_def_id, is_adt_trusted(type_def_id) );
             }
 
             let base_name = get_vir_base_name_kind(task_key.kind(), vcx);

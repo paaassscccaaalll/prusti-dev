@@ -168,377 +168,294 @@ pub(crate) fn predicate<'vir>(
     let ref_self = builder.vcx.mk_local("self", &vir::TypeData::Ref);
     let ref_self_decl = builder.vcx.mk_local_decl_local(ref_self);
     let ref_self_ex = builder.vcx.mk_local_ex_local(ref_self);
-    let def_id = adt.did();
-    let trusted = utils::is_adt_trusted(def_id);
 
-    if trusted {
-        match adt.adt_kind() {
-            ty::AdtKind::Struct if adt.is_box() => {
-                // For trusted Box, create empty hull without encoding fields
-                let snap_data = snap.specifics.expect_structlike();
-                
-                // Just create a predicate with body equals to true
-                let self_pred = builder.predicate(
-                    "true_predicate",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    Some( vir::expr! { true }),
-                );
-                
-                // also emptry body 
-                builder.function_snap = Some(builder.mk_function(
-                    "snap",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    snap_type,
-                    &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
-                    &[],
-                    None,
-                ).1);
-                
-                Ok((PredicateEncData::StructLike(PredicateEncDataStruct {
-                    snap_data,
-                    ref_to_field_refs: builder.vcx.alloc_slice(&[]),
-                }), None))
-            }
-            ty::AdtKind::Struct => {
-                // empty body
-                let snap_data = snap.specifics.expect_structlike();
-                
-                
-                let self_pred = builder.predicate(
-                    "",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    Some(vir::expr! { true }),
-                );
-                
-                
-                builder.function_snap = Some(builder.mk_function(
-                    "snap",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    snap_type,
-                    &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
-                    &[],
-                    None,
-                ).1);
-                
-                Ok((PredicateEncData::StructLike(PredicateEncDataStruct {
-                    snap_data,
-                    ref_to_field_refs: builder.vcx.alloc_slice(&[]),
-                }), None))
-            }
-            ty::AdtKind::Enum => {
-                
-                let snap_data = snap.specifics.expect_enumlike().unwrap();
-                
-                
-                let self_pred = builder.predicate(
-                    "",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    Some(vir::expr! { true }),
-                );
-                
-                
-                builder.function_snap = Some(builder.mk_function(
-                    "snap",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    snap_type,
-                    &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
-                    &[],
-                    None,
-                ).1);
-                
-                
-                let discr_func = builder.function(
-                    "trusted_discr",
-                    &[builder.vcx.mk_local_decl("s", snap_type)],
-                    snap_data.discr_prim.prim_type,
-                    &[],  
-                    &[],  
-                    None, 
-                );
-                
-                Ok((PredicateEncData::EnumLike(Some(PredicateEncDataEnum {
-                    discr: discr_func.to_known(),
-                    discr_prim: snap_data.discr_prim,
-                    variants: builder.vcx.alloc_slice(&[]),
-                })), None))
-            }
-            ty::AdtKind::Union => todo!(),
+    
+    if utils::is_adt_trusted(adt.did()) {
+        
+        builder.predicate(
+            "",
+            &[ref_self_decl].into_iter()
+                .chain(generic_decls.iter().cloned())
+                .collect::<Vec<_>>(),
+            None,
+        );
+        
+        builder.function_snap = Some(builder.mk_function(
+            "snap",
+            &[ref_self_decl].into_iter()
+                .chain(generic_decls.iter().cloned())
+                .collect::<Vec<_>>(),
+            snap_type,
+            &[],
+            &[],
+            None,
+        ).1);
+        
+        return Ok((PredicateEncData::Trusted, None));
+    }
+
+    // Regular (non-trusted) handling for ADTs
+    match adt.adt_kind() {
+        ty::AdtKind::Struct if adt.is_box() => {
+            let snap_data = snap.specifics.expect_structlike();
+
+            //let fields = variant
+            //    .fields
+            //    .iter()
+            //    .map(|f| deps.require_ref::<RustTyPredicatesEnc>(f.ty(builder.vcx.tcx(), params)).unwrap())
+            //    .collect::<Vec<_>>();
+
+            let (
+                field_accessors,
+                self_pred,
+                snap_expr,
+            ) = super::structlike::predicate(
+                "",
+                &[deps.require_ref::<RustTyPredicatesEnc>(params[0].expect_ty())?],
+                task_key,
+                &snap,
+                snap_data.field_snaps_to_snap,
+                deps,
+                generic_decls,
+                generic_exprs,
+                builder,
+            )?;
+
+            // Ref-to-snap
+            builder.function_snap = Some(builder.mk_function(
+                "snap",
+                &[ref_self_decl].into_iter()
+                    .chain(generic_decls.iter().cloned())
+                    .collect::<Vec<_>>(),
+                snap_type,
+                &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
+                &[],
+                Some(snap_expr),
+            ).1);
+
+            Ok((PredicateEncData::StructLike(PredicateEncDataStruct {
+                snap_data,
+                ref_to_field_refs: builder.vcx.alloc_slice(&field_accessors),
+            }), None))
         }
-    } else {
-        match adt.adt_kind() {
-            ty::AdtKind::Struct if adt.is_box() => {
-                let snap_data = snap.specifics.expect_structlike();
-    
-                //let fields = variant
-                //    .fields
-                //    .iter()
-                //    .map(|f| deps.require_ref::<RustTyPredicatesEnc>(f.ty(builder.vcx.tcx(), params)).unwrap())
-                //    .collect::<Vec<_>>();
-    
-                let (
-                    field_accessors,
-                    self_pred,
-                    snap_expr,
-                ) = super::structlike::predicate(
-                    "",
-                    &[deps.require_ref::<RustTyPredicatesEnc>(params[0].expect_ty())?],
-                    task_key,
-                    &snap,
-                    snap_data.field_snaps_to_snap,
-                    deps,
-                    generic_decls,
-                    generic_exprs,
-                    builder,
-                )?;
-    
-                // Ref-to-snap
-                builder.function_snap = Some(builder.mk_function(
-                    "snap",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    snap_type,
-                    &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
-                    &[],
-                    Some(snap_expr),
-                ).1);
-    
-                Ok((PredicateEncData::StructLike(PredicateEncDataStruct {
-                    snap_data,
-                    ref_to_field_refs: builder.vcx.alloc_slice(&field_accessors),
-                }), None))
-            }
-            ty::AdtKind::Struct => {
-                let snap_data = snap.specifics.expect_structlike();
-    
-                // for struct X<'a, 'b> {
-                //   o: i32,
-                //   a: &'a mut i32,
-                //   b: &'b mut i32,
-                // }
-                // we should emit:
-                // fields accessors
-                // - function p_X_field_0(self: Ref): Ref
-                // - function p_X_field_1(self: Ref): Ref
-                // - function p_X_field_2(self: Ref): Ref
-                // predicates
-                // - p_X(self: Ref) { // owned fields
-                //     p_Int_i32(p_X_field_0(self))
-                //     && p_Ref_mutable(p_X_field_1(self), s_Int_i32_type())
-                //     && p_Ref_mutable(p_X_field_2(self), s_Int_i32_type())
-                //   }
-                // - p_X_lft0(self: s_X) { // projection through 'a
-                //     p_Int_i32(s_Ref_deref(s_X_read_1(self)))
-                //   }
-                // - p_X_lft0(self: s_X) { // projection through 'a
-                //     p_Int_i32(s_Ref_deref(s_X_read_2(self)))
-                //   }
-                // functions
-                // - function p_X_unreachable(): s_X // for now; should be moved to domain encoder
-                // - function p_X_snap(self: Ref): s_X { .. }
-                // methods
-                // - method assign_p_X(self: Ref, value: s_X)
-    
-                let variant = adt.non_enum_variant();
-                let fields = variant
-                    .fields
-                    .iter()
-                    .map(|f| deps.require_ref::<RustTyPredicatesEnc>(f.ty(builder.vcx.tcx(), params)).unwrap())
-                    .collect::<Vec<_>>();
-    
-                let (
-                    field_accessors,
-                    self_pred,
-                    snap_expr,
-                ) = super::structlike::predicate(
-                    "",
-                    &fields,
-                    task_key,
-                    &snap,
-                    snap_data.field_snaps_to_snap,
-                    deps,
-                    generic_decls,
-                    generic_exprs,
-                    builder,
-                )?;
-    
-                // Ref-to-snap
-                builder.function_snap = Some(builder.mk_function(
-                    "snap",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    snap_type,
-                    &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
-                    &[],
-                    Some(snap_expr),
-                ).1);
-    
-                /*
-                // lifetime projection predicates
-                let _lft_predicates = params.iter()
-                    .enumerate()
-                    .flat_map(|(reg_idx, arg)| Some((reg_idx, arg.as_region()?)))
-                    .map(|(reg_idx, reg)| builder.predicate(
-                            &format!("lft_{reg_idx}"),
-                            &[snap_self_decl],
-                            Some(builder.vcx.mk_conj(&fields.iter()
-                                .zip(&variant.fields)
-                                .enumerate()
-                                .filter_map(|(field_idx, (field, rust_field))| match rust_field.ty(builder.vcx.tcx(), params).kind() {
-                                    ty::TyKind::Ref(field_reg, inner_ty, ty::Mutability::Mut) => {
-                                        if *field_reg != reg {
-                                            return None;
-                                        }
-                                        let inner_ty_enc = deps.require_ref::<RustTyPredicatesEnc>(*inner_ty).unwrap();
-                                        Some(inner_ty_enc.ref_to_pred(
-                                            builder.vcx,
-                                            field.generic_predicate.expect_ref().snap_data.deref_access.apply(builder.vcx, [
-                                                snap_data.field_access[field_idx].read.apply(builder.vcx, [snap_self_ex]),
-                                            ]),
-                                            None,
-                                        ))
+        ty::AdtKind::Struct => {
+            let snap_data = snap.specifics.expect_structlike();
+
+            // for struct X<'a, 'b> {
+            //   o: i32,
+            //   a: &'a mut i32,
+            //   b: &'b mut i32,
+            // }
+            // we should emit:
+            // fields accessors
+            // - function p_X_field_0(self: Ref): Ref
+            // - function p_X_field_1(self: Ref): Ref
+            // - function p_X_field_2(self: Ref): Ref
+            // predicates
+            // - p_X(self: Ref) { // owned fields
+            //     p_Int_i32(p_X_field_0(self))
+            //     && p_Ref_mutable(p_X_field_1(self), s_Int_i32_type())
+            //     && p_Ref_mutable(p_X_field_2(self), s_Int_i32_type())
+            //   }
+            // - p_X_lft0(self: s_X) { // projection through 'a
+            //     p_Int_i32(s_Ref_deref(s_X_read_1(self)))
+            //   }
+            // - p_X_lft0(self: s_X) { // projection through 'a
+            //     p_Int_i32(s_Ref_deref(s_X_read_2(self)))
+            //   }
+            // functions
+            // - function p_X_unreachable(): s_X // for now; should be moved to domain encoder
+            // - function p_X_snap(self: Ref): s_X { .. }
+            // methods
+            // - method assign_p_X(self: Ref, value: s_X)
+
+            let variant = adt.non_enum_variant();
+            let fields = variant
+                .fields
+                .iter()
+                .map(|f| deps.require_ref::<RustTyPredicatesEnc>(f.ty(builder.vcx.tcx(), params)).unwrap())
+                .collect::<Vec<_>>();
+
+            let (
+                field_accessors,
+                self_pred,
+                snap_expr,
+            ) = super::structlike::predicate(
+                "",
+                &fields,
+                task_key,
+                &snap,
+                snap_data.field_snaps_to_snap,
+                deps,
+                generic_decls,
+                generic_exprs,
+                builder,
+            )?;
+
+            // Ref-to-snap
+            builder.function_snap = Some(builder.mk_function(
+                "snap",
+                &[ref_self_decl].into_iter()
+                    .chain(generic_decls.iter().cloned())
+                    .collect::<Vec<_>>(),
+                snap_type,
+                &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
+                &[],
+                Some(snap_expr),
+            ).1);
+
+            /*
+            // lifetime projection predicates
+            let _lft_predicates = params.iter()
+                .enumerate()
+                .flat_map(|(reg_idx, arg)| Some((reg_idx, arg.as_region()?)))
+                .map(|(reg_idx, reg)| builder.predicate(
+                        &format!("lft_{reg_idx}"),
+                        &[snap_self_decl],
+                        Some(builder.vcx.mk_conj(&fields.iter()
+                            .zip(&variant.fields)
+                            .enumerate()
+                            .filter_map(|(field_idx, (field, rust_field))| match rust_field.ty(builder.vcx.tcx(), params).kind() {
+                                ty::TyKind::Ref(field_reg, inner_ty, ty::Mutability::Mut) => {
+                                    if *field_reg != reg {
+                                        return None;
                                     }
-                                    _ => None,
-                                })
-                                .collect::<Vec<_>>()))
-                        ))
-                    .collect::<Vec<_>>();
-                */
-    
-                Ok((PredicateEncData::StructLike(PredicateEncDataStruct {
-                    snap_data,
-                    ref_to_field_refs: builder.vcx.alloc_slice(&field_accessors),
-                }), None))
-            }
-            ty::AdtKind::Enum => {
-                let snap_data = snap.specifics.expect_enumlike().unwrap();
-    
-                // first encode the discriminant's type
-                let discr_ty = ty.discriminant_ty(builder.vcx.tcx());
-                let discr_ty_snap = deps.require_local::<RustTySnapshotsEnc>(discr_ty)?;
-                let discr_ty_snap_prim = discr_ty_snap.generic_snapshot.specifics.expect_primitive();
-                let discr_ty_out = deps.require_ref::<RustTyPredicatesEnc>(discr_ty)?;
-    
-                // Ref-to-Ref function for the discriminant field
-                let fdisc_func = builder.function(
-                    "field_discr",
-                    &[ref_self_decl],
-                    &vir::TypeData::Ref,
-                    &[],
-                    &[
-                        vir::expr! { ((ref_self) == (null)) == (([builder.vcx.mk_result(&vir::TypeData::Ref)]) == (null)) },
-                    ],
-                    None,
-                );
-    
-                let variants = adt
-                    .variants()
-                    .iter_enumerated()
-                    .zip(snap_data.variants)
-                    .map(|((var_idx, variant), snap_variant)| {
-                        let var_idx_num = var_idx.as_u32();
-    
-                        let fields = variant
-                            .fields
-                            .iter()
-                            .map(|f| deps.require_ref::<RustTyPredicatesEnc>(f.ty(builder.vcx.tcx(), params)).unwrap())
-                            .collect::<Vec<_>>();
-    
-                        let (
-                            field_accessors,
-                            variant_pred,
-                            variant_snap_expr,
-                        ) = super::structlike::predicate(
-                            &format!("{var_idx_num}_"),
-                            &fields,
-                            task_key,
-                            &snap,
-                            snap_variant.fields.field_snaps_to_snap,
-                            deps,
-                            generic_decls,
-                            generic_exprs,
-                            builder,
-                        )?;
-    
-                        let variant_pred_expr = vir::expr! {
-                            (([discr_ty_out.ref_to_snap(builder.vcx, fdisc_func.apply(builder.vcx, &[ref_self_ex]))])
-                                == ([snap_variant.discr])) => ([variant_pred](ref_self, ..[generic_exprs]))
-                        };
-    
-                        Ok((
-                            variant_snap_expr,
-                            variant_pred_expr,
-                            PredicateEncDataVariant {
-                                predicate: variant_pred,
-                                vid: var_idx,
-                                discr: snap_variant.discr,
-                                fields: PredicateEncDataStruct {
-                                    snap_data: snap_variant.fields,
-                                    ref_to_field_refs: builder.vcx.alloc_slice(&field_accessors),
-                                },
-                            },
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-    
-                // main predicate
-                let discr_app = discr_ty_out.ref_to_snap(builder.vcx, fdisc_func.apply(builder.vcx, &[ref_self_ex]));
-                let self_pred = builder.predicate(
-                    "",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    Some(vir::expr! {
-                        ([discr_ty_out.ref_to_pred(builder.vcx, fdisc_func.apply(builder.vcx, &[ref_self_ex]), None)])
-                        && (([builder.vcx.mk_disj(&variants.iter()
-                            .map(|variant| vir::expr! { ([discr_app]) == ([variant.2.discr]) })
-                            .collect::<Vec<_>>())])
-                        && ([builder.vcx.mk_conj(&variants.iter()
-                            .map(|v| v.1)
-                            .collect::<Vec<_>>())]))
-                    }),
-                );
-    
-                // Ref-to-snap
-                builder.function_snap = Some(builder.mk_function(
-                    "snap",
-                    &[ref_self_decl].into_iter()
-                        .chain(generic_decls.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    snap_type,
-                    &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
-                    &[],
-                    Some(vir::expr! {
-                        unfolding_wildcard ([self_pred](ref_self, ..[generic_exprs])) in ([variants.iter()
-                            .fold(builder.unreachable_to_snap.unwrap().0.apply(builder.vcx, []), |else_, variant| builder.vcx.mk_ternary_expr(
-                                vir::expr! { ([discr_app]) == ([variant.2.discr]) },
-                                variant.0,
-                                else_,
-                            ))])
-                    }),
-                ).1);
-    
-                Ok((PredicateEncData::EnumLike(Some(PredicateEncDataEnum {
-                    discr: fdisc_func.to_known(),
-                    discr_prim: discr_ty_snap_prim,
-                    //discr_bounds: (),
-                    variants: builder.vcx.alloc_slice(&variants.iter().map(|v| v.2).collect::<Vec<_>>()),
-                })), None))
-            }
-            ty::AdtKind::Union => todo!(),
+                                    let inner_ty_enc = deps.require_ref::<RustTyPredicatesEnc>(*inner_ty).unwrap();
+                                    Some(inner_ty_enc.ref_to_pred(
+                                        builder.vcx,
+                                        field.generic_predicate.expect_ref().snap_data.deref_access.apply(builder.vcx, [
+                                            snap_data.field_access[field_idx].read.apply(builder.vcx, [snap_self_ex]),
+                                        ]),
+                                        None,
+                                    ))
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()))
+                    ))
+                .collect::<Vec<_>>();
+            */
+
+            Ok((PredicateEncData::StructLike(PredicateEncDataStruct {
+                snap_data,
+                ref_to_field_refs: builder.vcx.alloc_slice(&field_accessors),
+            }), None))
         }
+        ty::AdtKind::Enum => {
+            let snap_data = snap.specifics.expect_enumlike().unwrap();
+
+            // first encode the discriminant's type
+            let discr_ty = ty.discriminant_ty(builder.vcx.tcx());
+            let discr_ty_snap = deps.require_local::<RustTySnapshotsEnc>(discr_ty)?;
+            let discr_ty_snap_prim = discr_ty_snap.generic_snapshot.specifics.expect_primitive();
+            let discr_ty_out = deps.require_ref::<RustTyPredicatesEnc>(discr_ty)?;
+
+            // Ref-to-Ref function for the discriminant field
+            let fdisc_func = builder.function(
+                "field_discr",
+                &[ref_self_decl],
+                &vir::TypeData::Ref,
+                &[],
+                &[
+                    vir::expr! { ((ref_self) == (null)) == (([builder.vcx.mk_result(&vir::TypeData::Ref)]) == (null)) },
+                ],
+                None,
+            );
+
+            let variants = adt
+                .variants()
+                .iter_enumerated()
+                .zip(snap_data.variants)
+                .map(|((var_idx, variant), snap_variant)| {
+                    let var_idx_num = var_idx.as_u32();
+
+                    let fields = variant
+                        .fields
+                        .iter()
+                        .map(|f| deps.require_ref::<RustTyPredicatesEnc>(f.ty(builder.vcx.tcx(), params)).unwrap())
+                        .collect::<Vec<_>>();
+
+                    let (
+                        field_accessors,
+                        variant_pred,
+                        variant_snap_expr,
+                    ) = super::structlike::predicate(
+                        &format!("{var_idx_num}_"),
+                        &fields,
+                        task_key,
+                        &snap,
+                        snap_variant.fields.field_snaps_to_snap,
+                        deps,
+                        generic_decls,
+                        generic_exprs,
+                        builder,
+                    )?;
+
+                    let variant_pred_expr = vir::expr! {
+                        (([discr_ty_out.ref_to_snap(builder.vcx, fdisc_func.apply(builder.vcx, &[ref_self_ex]))])
+                            == ([snap_variant.discr])) => ([variant_pred](ref_self, ..[generic_exprs]))
+                    };
+
+                    Ok((
+                        variant_snap_expr,
+                        variant_pred_expr,
+                        PredicateEncDataVariant {
+                            predicate: variant_pred,
+                            vid: var_idx,
+                            discr: snap_variant.discr,
+                            fields: PredicateEncDataStruct {
+                                snap_data: snap_variant.fields,
+                                ref_to_field_refs: builder.vcx.alloc_slice(&field_accessors),
+                            },
+                        },
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // main predicate
+            let discr_app = discr_ty_out.ref_to_snap(builder.vcx, fdisc_func.apply(builder.vcx, &[ref_self_ex]));
+            let self_pred = builder.predicate(
+                "",
+                &[ref_self_decl].into_iter()
+                    .chain(generic_decls.iter().cloned())
+                    .collect::<Vec<_>>(),
+                Some(vir::expr! {
+                    ([discr_ty_out.ref_to_pred(builder.vcx, fdisc_func.apply(builder.vcx, &[ref_self_ex]), None)])
+                    && (([builder.vcx.mk_disj(&variants.iter()
+                        .map(|variant| vir::expr! { ([discr_app]) == ([variant.2.discr]) })
+                        .collect::<Vec<_>>())])
+                    && ([builder.vcx.mk_conj(&variants.iter()
+                        .map(|v| v.1)
+                        .collect::<Vec<_>>())]))
+                }),
+            );
+
+            // Ref-to-snap
+            builder.function_snap = Some(builder.mk_function(
+                "snap",
+                &[ref_self_decl].into_iter()
+                    .chain(generic_decls.iter().cloned())
+                    .collect::<Vec<_>>(),
+                snap_type,
+                &[vir::expr! { acc_wildcard([self_pred](ref_self, ..[generic_exprs])) }],
+                &[],
+                Some(vir::expr! {
+                    unfolding_wildcard ([self_pred](ref_self, ..[generic_exprs])) in ([variants.iter()
+                        .fold(builder.unreachable_to_snap.unwrap().0.apply(builder.vcx, []), |else_, variant| builder.vcx.mk_ternary_expr(
+                            vir::expr! { ([discr_app]) == ([variant.2.discr]) },
+                            variant.0,
+                            else_,
+                        ))])
+                }),
+            ).1);
+
+            Ok((PredicateEncData::EnumLike(Some(PredicateEncDataEnum {
+                discr: fdisc_func.to_known(),
+                discr_prim: discr_ty_snap_prim,
+                //discr_bounds: (),
+                variants: builder.vcx.alloc_slice(&variants.iter().map(|v| v.2).collect::<Vec<_>>()),
+            })), None))
+        }
+        ty::AdtKind::Union => todo!(),
     }
 }
