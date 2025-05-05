@@ -170,7 +170,7 @@ impl<'vir> PredicateEncOutputRef<'vir> {
     pub fn get_variant_any(&self, vid: abi::VariantIdx) -> &PredicateEncDataStruct<'vir> {
         match &self.specifics {
             // not sure about this...
-            PredicateEncData::Trusted => ,//not sure if this is the right place to handle this or if it should be handled in the mir_impure.rs mir_pure.rs
+            // PredicateEncData::Trusted => ,//not sure if this is the right place to handle this or if it should be handled in the mir_impure.rs mir_pure.rs
 
 
             PredicateEncData::StructLike(s) => {
