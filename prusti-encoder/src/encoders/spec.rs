@@ -46,8 +46,6 @@ where
     })
 }
 
-
-
 pub fn init_def_spec(def_spec: DefSpecificationMap) {
     DEF_SPEC_MAP.replace(Some(def_spec));
 }
@@ -97,9 +95,23 @@ impl TaskEncoder for SpecEnc {
                     .unwrap_or_default();
                 let pledges = specs
                     .and_then(|specs| specs.base_spec.pledges.expect_empty_or_inherent())
-                    .map(|specs| vcx.alloc_slice(&specs.iter().map(|pledge| (pledge.lhs, pledge.rhs)).collect::<Vec<_>>()))
+                    .map(|specs| {
+                        vcx.alloc_slice(
+                            &specs
+                                .iter()
+                                .map(|pledge| (pledge.lhs, pledge.rhs))
+                                .collect::<Vec<_>>(),
+                        )
+                    })
                     .unwrap_or_default();
-                Ok((SpecEncOutput { pres, posts, pledges }, ()))
+                Ok((
+                    SpecEncOutput {
+                        pres,
+                        posts,
+                        pledges,
+                    },
+                    (),
+                ))
             })
         })
     }

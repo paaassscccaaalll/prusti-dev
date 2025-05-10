@@ -1,4 +1,7 @@
-use prusti_rustc_interface::middle::{mir, ty::{self, Ty}};
+use prusti_rustc_interface::middle::{
+    mir,
+    ty::{self, Ty},
+};
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
 use vir::{CallableIdent, ExprGen, FunctionIdent, Reify, UnknownArity, ViperIdent};
 
@@ -9,8 +12,7 @@ use crate::encoders::{
         ty::{EncodeGenericsAsLifted, LiftedTy, LiftedTyEnc},
     },
     most_generic_ty::extract_type_params,
-    utils,
-    GenericEnc, MirLocalDefEnc, MirPureEnc, MirPureEncTask, MirSpecEnc, PureKind,
+    utils, GenericEnc, MirLocalDefEnc, MirPureEnc, MirPureEncTask, MirSpecEnc, PureKind,
 };
 
 use super::function_enc::FunctionEnc;
@@ -122,8 +124,6 @@ where
                 })
             }));
 
-
-            
             let expr = if trusted {
                 None
             } else {

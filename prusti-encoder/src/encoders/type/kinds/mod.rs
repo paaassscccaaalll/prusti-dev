@@ -10,5 +10,4 @@ pub mod param;
 pub mod primitive;
 pub mod str;
 pub mod tuple;
-pub mod trusted;
 mod structlike;

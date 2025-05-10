@@ -1,25 +1,18 @@
+use super::{
+    domain::{DomainDataImmRef, DomainDataMutRef, DomainDataPrim, DomainDataStruct},
+    lifted::{generic::LiftedGeneric, ty::LiftedTy},
+    most_generic_ty::{get_vir_base_name_kind, MostGenericTy},
+    snapshot::SnapshotEnc,
+};
+use crate::encoders::{utils::is_adt_trusted, GenericEnc};
 use prusti_rustc_interface::{
     middle::ty::{self, TyKind},
     target::abi,
 };
 use task_encoder::{EncodeFullResult, TaskEncoder, TaskEncoderDependencies};
 use vir::{
-    BinaryArity, CallableIdent, FunctionIdent, MethodIdent, NullaryArity, PredicateIdent, TypeData, UnaryArity, UnknownArity, VirCtxt
-};
-
-use crate::encoders::{utils::is_function_trusted, GenericEnc, utils::is_adt_trusted};
-use crate::encoders::spec;
-use crate::encoders::utils;
-use prusti_interface::specs::typed::DefSpecificationMap;
-
-use super::{
-    domain::{DomainDataImmRef, DomainDataMutRef, DomainDataPrim, DomainDataStruct},
-    lifted::{
-        generic::LiftedGeneric,
-        ty::LiftedTy,
-    },
-    most_generic_ty::{get_vir_base_name_kind, MostGenericTy},
-    snapshot::SnapshotEnc,
+    BinaryArity, CallableIdent, FunctionIdent, MethodIdent, NullaryArity, PredicateIdent, TypeData,
+    UnaryArity, UnknownArity, VirCtxt,
 };
 
 /// Takes a `MostGenericTy` and returns various Viper predicates and functions for
@@ -169,10 +162,6 @@ impl<'vir> PredicateEncOutputRef<'vir> {
     }
     pub fn get_variant_any(&self, vid: abi::VariantIdx) -> &PredicateEncDataStruct<'vir> {
         match &self.specifics {
-            // not sure about this...
-            // PredicateEncData::Trusted => ,//not sure if this is the right place to handle this or if it should be handled in the mir_impure.rs mir_pure.rs
-
-
             PredicateEncData::StructLike(s) => {
                 assert_eq!(vid, abi::FIRST_VARIANT);
                 s
@@ -220,14 +209,15 @@ pub(crate) struct PredicateBuilder<'vir> {
     pub(crate) methods: Vec<vir::Method<'vir>>,
 
     // TODO: function idents!
-    pub(crate) unreachable_to_snap: Option<(vir::FunctionIdent<'vir, NullaryArity<'vir>>, vir::Function<'vir>)>,
+    pub(crate) unreachable_to_snap: Option<(
+        vir::FunctionIdent<'vir, NullaryArity<'vir>>,
+        vir::Function<'vir>,
+    )>,
     pub(crate) function_snap: Option<vir::Function<'vir>>,
 }
 
 impl<'vir> PredicateBuilder<'vir> {
-    pub(crate) fn new(
-        vcx: &'vir vir::VirCtxt<'vir>,
-    ) -> Self {
+    pub(crate) fn new(vcx: &'vir vir::VirCtxt<'vir>) -> Self {
         PredicateBuilder {
             vcx,
             name: None,
@@ -254,11 +244,7 @@ impl<'vir> PredicateBuilder<'vir> {
         }
     }
 
-    pub(crate) fn field(
-        &mut self,
-        name: &str,
-        typ: vir::Type<'vir>,
-    ) -> vir::Field<'vir> {
+    pub(crate) fn field(&mut self, name: &str, typ: vir::Type<'vir>) -> vir::Field<'vir> {
         let name = self.ident_str(name);
         let field = self.vcx.mk_field(name, typ);
         self.fields.push(field);
@@ -273,7 +259,10 @@ impl<'vir> PredicateBuilder<'vir> {
         let name = self.ident_str(name);
         let ident = vir::PredicateIdent::new(
             vir::ViperIdent::new(name),
-            vir::UnknownArity::new(self.vcx.alloc_slice(&args.iter().map(|arg| arg.ty).collect::<Vec<_>>())),
+            vir::UnknownArity::new(
+                self.vcx
+                    .alloc_slice(&args.iter().map(|arg| arg.ty).collect::<Vec<_>>()),
+            ),
         );
         ident
     }
@@ -285,11 +274,10 @@ impl<'vir> PredicateBuilder<'vir> {
         expr: Option<vir::Expr<'vir>>,
     ) -> vir::PredicateIdent<'vir, vir::UnknownArity<'vir>> {
         let ident = self.predicate_ident(name, args);
-        self.predicates.push(self.vcx.mk_predicate(
-            ident,
-            self.vcx.alloc_slice(args),
-            expr,
-        ));
+        self.predicates.push(
+            self.vcx
+                .mk_predicate(ident, self.vcx.alloc_slice(args), expr),
+        );
         ident
     }
 
@@ -302,7 +290,10 @@ impl<'vir> PredicateBuilder<'vir> {
         let name = self.ident_str(name);
         let ident = vir::FunctionIdent::new(
             vir::ViperIdent::new(name),
-            vir::UnknownArity::new(self.vcx.alloc_slice(&args.iter().map(|arg| arg.ty).collect::<Vec<_>>())),
+            vir::UnknownArity::new(
+                self.vcx
+                    .alloc_slice(&args.iter().map(|arg| arg.ty).collect::<Vec<_>>()),
+            ),
             ret,
         );
         ident
@@ -316,21 +307,30 @@ impl<'vir> PredicateBuilder<'vir> {
         pres: &[vir::Expr<'vir>],
         posts: &[vir::Expr<'vir>],
         expr: Option<vir::Expr<'vir>>,
-    ) -> (vir::FunctionIdent<'vir, vir::UnknownArity<'vir>>, vir::Function<'vir>) {
+    ) -> (
+        vir::FunctionIdent<'vir, vir::UnknownArity<'vir>>,
+        vir::Function<'vir>,
+    ) {
         let name = self.ident_str(name);
         let ident = vir::FunctionIdent::new(
             vir::ViperIdent::new(name),
-            vir::UnknownArity::new(self.vcx.alloc_slice(&args.iter().map(|arg| arg.ty).collect::<Vec<_>>())),
+            vir::UnknownArity::new(
+                self.vcx
+                    .alloc_slice(&args.iter().map(|arg| arg.ty).collect::<Vec<_>>()),
+            ),
             ret,
         );
-        (ident, self.vcx.mk_function(
-            name,
-            self.vcx.alloc_slice(args),
-            ret,
-            self.vcx.alloc_slice(pres),
-            self.vcx.alloc_slice(posts),
-            expr,
-        ))
+        (
+            ident,
+            self.vcx.mk_function(
+                name,
+                self.vcx.alloc_slice(args),
+                ret,
+                self.vcx.alloc_slice(pres),
+                self.vcx.alloc_slice(posts),
+                expr,
+            ),
+        )
     }
 
     pub(crate) fn function(
@@ -358,7 +358,10 @@ impl<'vir> PredicateBuilder<'vir> {
         let name = self.ident_str(name);
         let ident = MethodIdent::new(
             vir::ViperIdent::new(name),
-            UnknownArity::new(self.vcx.alloc_slice(&args.iter().map(|arg| arg.ty).collect::<Vec<_>>())),
+            UnknownArity::new(
+                self.vcx
+                    .alloc_slice(&args.iter().map(|arg| arg.ty).collect::<Vec<_>>()),
+            ),
             //ret,
         );
         self.methods.push(self.vcx.mk_method(
@@ -439,7 +442,6 @@ impl TaskEncoder for PredicateEnc {
                     specifics: PredicateEncData::Param,
                     generics: &[],
                     ref_to_indirect_pred: None,
-                    
                 },
             )?;
             let dep = deps.require_local::<GenericEnc>(())?;
@@ -468,13 +470,6 @@ impl TaskEncoder for PredicateEnc {
 
         if let Some(res) = vir::with_vcx(|vcx| {
             let mut builder = PredicateBuilder::new(vcx);
-
-            if let TyKind::Adt(adt_def, _) = task_key.kind() {
-                let type_def_id = adt_def.did();
-                let adt_name = vcx.tcx().def_path_str(type_def_id);
-                println!("Processing ADT: {} (DefId: {:?}) Trusted: {}", adt_name, type_def_id, is_adt_trusted(type_def_id) );
-            }
-
             let base_name = get_vir_base_name_kind(task_key.kind(), vcx);
             builder.set_name(&base_name);
 
@@ -482,22 +477,24 @@ impl TaskEncoder for PredicateEnc {
             let ref_self = vcx.mk_local("self", &vir::TypeData::Ref);
             let ref_self_decl = vcx.mk_local_decl_local(ref_self);
 
-            let generic_decls = snap.generics.iter()
-                .map(|g| g.decl())
-                .collect::<Vec<_>>();
-            let generic_exprs = snap.generics.iter()
+            let generic_decls = snap.generics.iter().map(|g| g.decl()).collect::<Vec<_>>();
+            let generic_exprs = snap
+                .generics
+                .iter()
                 .map(|g| g.expr(builder.vcx))
                 .collect::<Vec<_>>();
 
             let self_pred_ident = builder.predicate_ident(
                 "",
-                &[ref_self_decl].into_iter()
+                &[ref_self_decl]
+                    .into_iter()
                     .chain(generic_decls.iter().cloned())
                     .collect::<Vec<_>>(),
             );
             let snap_func_ident = builder.function_ident(
                 "snap",
-                &[ref_self_decl].into_iter()
+                &[ref_self_decl]
+                    .into_iter()
                     .chain(generic_decls.iter().cloned())
                     .collect::<Vec<_>>(),
                 snap_type,
@@ -519,7 +516,8 @@ impl TaskEncoder for PredicateEnc {
             let value = vcx.mk_local("value", snap_type);
             let method_assign = builder.method(
                 "assign",
-                &[ref_self_decl].into_iter()
+                &[ref_self_decl]
+                    .into_iter()
                     .chain(generic_decls.iter().cloned())
                     .chain([vcx.mk_local_decl_local(value)])
                     .collect::<Vec<_>>(),
@@ -536,14 +534,66 @@ impl TaskEncoder for PredicateEnc {
                 | TyKind::Char
                 | TyKind::Int(_)
                 | TyKind::Uint(_)
-                | TyKind::Float(_) => super::kinds::primitive::predicate(*task_key, snap.clone(), deps, &mut builder)?,
-                TyKind::Adt(..) => super::kinds::adt::predicate(*task_key, snap.clone(), deps, &generic_decls, &generic_exprs, &mut builder, )?,
-                TyKind::Ref(_, _, ty::Mutability::Not) => super::kinds::immref::predicate(*task_key, snap.clone(), deps, &generic_decls, &generic_exprs, &mut builder)?,
-                TyKind::Ref(_, _, ty::Mutability::Mut) => super::kinds::mutref::predicate(*task_key, snap.clone(), deps, /*&generic_decls, &generic_exprs, */&mut builder)?,
-                TyKind::Never => (super::kinds::never::predicate(*task_key, snap.clone(), deps, /*&generic_decls, &generic_exprs, */&mut builder)?, None),
-                TyKind::Closure(..) => (super::kinds::closure::predicate(*task_key, snap.clone(), deps, &generic_decls, &generic_exprs, &mut builder)?, None),
-                TyKind::Tuple(..) => (super::kinds::tuple::predicate(*task_key, snap.clone(), deps, &generic_decls, &generic_exprs, &mut builder)?, None),
-                TyKind::Str => (super::kinds::str::predicate(*task_key, snap.clone(), deps, &mut builder)?, None),
+                | TyKind::Float(_) => {
+                    super::kinds::primitive::predicate(*task_key, snap.clone(), deps, &mut builder)?
+                }
+                TyKind::Adt(..) => super::kinds::adt::predicate(
+                    *task_key,
+                    snap.clone(),
+                    deps,
+                    &generic_decls,
+                    &generic_exprs,
+                    &mut builder,
+                )?,
+                TyKind::Ref(_, _, ty::Mutability::Not) => super::kinds::immref::predicate(
+                    *task_key,
+                    snap.clone(),
+                    deps,
+                    &generic_decls,
+                    &generic_exprs,
+                    &mut builder,
+                )?,
+                TyKind::Ref(_, _, ty::Mutability::Mut) => super::kinds::mutref::predicate(
+                    *task_key,
+                    snap.clone(),
+                    deps,
+                    /*&generic_decls, &generic_exprs, */ &mut builder,
+                )?,
+                TyKind::Never => (
+                    super::kinds::never::predicate(
+                        *task_key,
+                        snap.clone(),
+                        deps,
+                        /*&generic_decls, &generic_exprs, */ &mut builder,
+                    )?,
+                    None,
+                ),
+                TyKind::Closure(..) => (
+                    super::kinds::closure::predicate(
+                        *task_key,
+                        snap.clone(),
+                        deps,
+                        &generic_decls,
+                        &generic_exprs,
+                        &mut builder,
+                    )?,
+                    None,
+                ),
+                TyKind::Tuple(..) => (
+                    super::kinds::tuple::predicate(
+                        *task_key,
+                        snap.clone(),
+                        deps,
+                        &generic_decls,
+                        &generic_exprs,
+                        &mut builder,
+                    )?,
+                    None,
+                ),
+                TyKind::Str => (
+                    super::kinds::str::predicate(*task_key, snap.clone(), deps, &mut builder)?,
+                    None,
+                ),
                 TyKind::Param(_) => unreachable!(),
                 _ => return Ok(None),
             };
@@ -568,7 +618,9 @@ impl TaskEncoder for PredicateEnc {
         }
 
         match task_key.kind() {
-            TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_) => unreachable!(),
+            TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_) => {
+                unreachable!()
+            }
             TyKind::Adt(..) => unreachable!(),
             TyKind::Ref(..) => unreachable!(),
             TyKind::Param(_) => unreachable!(),

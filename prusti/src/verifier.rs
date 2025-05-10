@@ -38,9 +38,10 @@ pub fn verify(env: Environment<'_>, def_spec: typed::DefSpecificationMap) {
             }
         }
 
-        let tcx = env.tcx();
-        
-        let request = prusti_encoder::test_entrypoint(tcx, env.body, def_spec);
+        // encode the crate to a RequestWithContext
+        // TODO: push RequestWithContext through (replace VerificationRequest
+        //   which is constructed further inside `prusti_server`)
+        let request = prusti_encoder::test_entrypoint(env.tcx(), env.body, def_spec);
         let program = request.program;
 
         let mut results = prusti_server::verify_programs(vec![program]);
@@ -55,36 +56,23 @@ pub fn verify(env: Environment<'_>, def_spec: typed::DefSpecificationMap) {
             viper::VerificationResult::JavaException(_e) => false,
             viper::VerificationResult::ConsistencyErrors(_e) => false,
             viper::VerificationResult::Failure(errors) => {
-                let mut has_non_trusted_errors = false;
-                
                 for error in errors {
                     // TODO: offending_pos_id should always be set!
-                    if let Some(offending_pos_id) = &error.offending_pos_id {
-                        let error_from_trusted_fn = is_error_from_trusted_function(&error, tcx, &|def_id| env.name.get_item_name(def_id).to_string());
-                        
-                        if error_from_trusted_fn {
-                            debug!("Ignoring error in trusted function: {:?}", error.full_id);
-                            continue; 
-                        }
-                        
-                        has_non_trusted_errors = true;
-                        
+                    if let Some(offending_pos_id) = error.offending_pos_id {
                         if let Some(translated_errors) = prusti_encoder::backtranslate_error(
                             &error.full_id,
                             offending_pos_id.parse::<usize>().unwrap(),
-                            error.reason_pos_id.as_ref().and_then(|id| id.parse::<usize>().ok()),
+                            error.reason_pos_id.and_then(|id| id.parse::<usize>().ok()),
                         ) {
                             for prusti_error in translated_errors {
                                 prusti_error.emit(&env.diagnostic);
                             }
                         }
                     } else {
-                        has_non_trusted_errors = true;
                         eprintln!("verifier error without offending_pos_id: {error:?}");
                     }
                 }
-                
-                !has_non_trusted_errors
+                false
             }
         };
         if !success {
@@ -96,67 +84,44 @@ pub fn verify(env: Environment<'_>, def_spec: typed::DefSpecificationMap) {
             //             && config::allow_unreachable_unsupported_code())
             // );
         }
-    }
-}
 
-fn is_error_from_trusted_function<'a>(
-    error: &viper::VerificationError, 
-    tcx: prusti_rustc_interface::middle::ty::TyCtxt,
-    name_resolver: &'a dyn Fn(prusti_rustc_interface::hir::def_id::DefId) -> String,
-) -> bool {
-    let function_name = extract_function_name_from_error(error);
-    
-    if let Some(name) = function_name {
-        tcx.hir().items().filter_map(|item_id| {
-            let def_id = item_id.owner_id.to_def_id();
-            if !matches!(tcx.def_kind(def_id), 
-                prusti_rustc_interface::hir::def::DefKind::Fn | 
-                prusti_rustc_interface::hir::def::DefKind::AssocFn) {
-                return None;
-            }
-            
-            let item_name = name_resolver(def_id);
-            
-            if item_name.contains(&name) {
-
-                for attr in tcx.get_attrs_unchecked(def_id) {
-
-                    let path_str = format!("{:?}", attr.path());
-                    if path_str.contains("trusted") {
-                        return Some(true);
-                    }
-                }
-            }
-            
-            None
-        }).next().is_some()
-    } else {
-        false
+        //let verification_result =
+        //    if verification_task.procedures.is_empty() && verification_task.types.is_empty() {
+        //        VerificationResult::Success
+        //    } else {
+        //        debug!("Dump borrow checker info...");
+        //        env.dump_borrowck_info(&verification_task.procedures);
+        //
+        //        let mut verifier = Verifier::new(&env, def_spec);
+        //        let verification_result = verifier.verify(&verification_task);
+        //        debug!("Verifier returned {:?}", verification_result);
+        //
+        //        verification_result
+        //    };
+        //
+        //match verification_result {
+        //    VerificationResult::Success => {
+        //        if env.diagnostic.has_errors() {
+        //            user::message(
+        //                "Verification result is inconclusive because errors \
+        //                               were encountered during encoding.",
+        //            );
+        //        } else {
+        //            user::message(format!(
+        //                "Successful verification of {} items",
+        //                verification_task.procedures.len()
+        //            ));
+        //        }
+        //    }
+        //    VerificationResult::Failure => {
+        //        user::message("Verification failed");
+        //        assert!(
+        //            env.diagnostic.has_errors()
+        //                || config::internal_errors_as_warnings()
+        //                || (config::skip_unsupported_features()
+        //                    && config::allow_unreachable_unsupported_code())
+        //        );
+        //    }
+        //};
     }
-}
-
-fn extract_function_name_from_error(error: &viper::VerificationError) -> Option<String> {
-    if let Some(last_dot_idx) = error.full_id.rfind('.') {
-        let name = &error.full_id[last_dot_idx + 1..];
-        if !name.is_empty() {
-            return Some(name.to_string());
-        }
-    }
-    
-    let message = &error.message;
-    if let Some(idx) = message.find("function ") {
-        let start = idx + "function ".len();
-        if let Some(end) = message[start..].find('(') {
-            return Some(message[start..start + end].trim().to_string());
-        }
-    }
-    
-    if let Some(idx) = message.find("method ") {
-        let start = idx + "method ".len();
-        if let Some(end) = message[start..].find('(') {
-            return Some(message[start..start + end].trim().to_string());
-        }
-    }
-    
-    None
 }
