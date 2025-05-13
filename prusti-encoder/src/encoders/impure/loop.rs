@@ -7,32 +7,89 @@ use pcg::{
     r#loop::LoopId,
     utils::{maybe_old::MaybeOldPlace, maybe_remote::MaybeRemotePlace, Place, SnapshotLocation},
 };
-use prusti_rustc_interface::middle::mir;
+use prusti_rustc_interface::{
+    middle::{
+        mir::{self, visit::Visitor},
+        ty::{self, TyKind},
+    },
+    span::def_id::DefId,
+};
+use std::collections::HashSet;
 
 use task_encoder::TaskEncoder;
 use vir::Reify;
 
-use crate::encoders::{
-    indirect::{IndirectKey, IndirectPredicatesEnc},
-    rust_ty_predicates::{RustTyPredicatesEnc, RustTyPredicatesEncOutputRef},
-    ImpureEncVisitor,
+use crate::{
+    encoders::{
+        indirect::{IndirectKey, IndirectPredicatesEnc},
+        lifted::rust_ty_cast::RustTyCastersEnc,
+        mir_pure::{MirPureEnc, MirPureEncTask, PureKind},
+        rust_ty_predicates::{RustTyPredicatesEnc, RustTyPredicatesEncOutputRef},
+        rust_ty_snapshots::RustTySnapshotsEnc,
+        spec, ImpureEncVisitor,
+    },
+    CastTypePure,
 };
+
+type ExprInput<'vir> = (DefId, &'vir [vir::Expr<'vir>]);
+type ExprRet<'vir> = vir::ExprGen<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
 
 pub(super) enum WandOldOuter<'vir> {
     LetBind(Vec<(&'vir str, vir::Expr<'vir>)>),
     Label(Option<&'vir str>),
 }
 
+struct CollectedLocals {
+    locals: HashSet<mir::Local>,
+}
+
+impl CollectedLocals {
+    fn new() -> Self {
+        Self {
+            locals: HashSet::new(),
+        }
+    }
+}
+
+impl<'tcx> Visitor<'tcx> for CollectedLocals {
+    fn visit_local(
+        &mut self,
+        local: mir::Local,
+        _context: mir::visit::PlaceContext,
+        _location: mir::Location,
+    ) {
+        self.locals.insert(local);
+    }
+}
+
 impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
+    fn collect_used_locals_in_loop(
+        &self,
+        loop_id: LoopId,
+    ) -> std::collections::HashSet<mir::Local> {
+        let mut visitor = CollectedLocals::new();
+
+        for (block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
+            if !self.loop_analysis.in_loop(block_idx, loop_id) {
+                continue;
+            }
+
+            visitor.visit_basic_block_data(block_idx, block_data);
+        }
+
+        visitor.locals
+    }
+
     /// Calculate invariant at loop head
     pub(crate) fn get_loop_inv(
         &mut self,
-        _lh: LoopId,
+        lh: LoopId,
         cfpcs: &PcgBasicBlock<'vir>,
     ) -> &'vir [vir::Expr<'vir>] {
         let mut inv = Vec::new();
         let start = &cfpcs.statements[0];
         let state = &start.states[EvalStmtPhase::PreOperands];
+        let used_locals = self.collect_used_locals_in_loop(lh);
         // let borrows = &*start.borrows[EvalStmtPhase::PreOperands];
         // self.stmt(self.vcx.mk_comment_stmt(
         //     vir::vir_format!(self.vcx, "_borrows: {:#?}", borrows),
@@ -44,6 +101,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let cap = cap_local.get_allocated();
             for place in cap.leaves(self.pcg_ctxt()).iter() {
                 if !state.capabilities().is_exclusive(*place) {
+                    continue;
+                }
+                if !used_locals.contains(&place.local) {
                     continue;
                 }
                 let (place_res, snap, _, _) = self.encode_place_snap(*place);
@@ -91,6 +151,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             }
             inv.push(wand);
         }
+
+        let loop_invariants_map = self.build_loop_invariants_map();
+        if let Some(loop_invariants) = loop_invariants_map.get(&lh) {
+            inv.extend(loop_invariants.iter().cloned());
+        }
+
         self.vcx.alloc_slice(&inv)
     }
 
@@ -246,7 +312,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     {
                         let is_loop_invariant = spec::with_type_spec(|def_spec| {
                             if let Some(loop_spec) = def_spec.get_loop_spec(cl_def_id) {
-                                assert!(!matches!(loop_spec, prusti_interface::specs::typed::LoopSpecification::BodyInvariant(_)), "body_invariant! currently not supported");
+                                assert!(!matches!(loop_spec, prusti_interface::specs::typed::LoopSpecification::Invariant(_)), "body_invariant! currently not supported");
                                 matches!(loop_spec, prusti_interface::specs::typed::LoopSpecification::LoopInvariant(_))
                             } else {
                                 false
