@@ -48,6 +48,7 @@ where
         let caller_def_id = Self::get_caller_def_id(&task_key);
         let trusted = utils::is_function_trusted(def_id);
         vir::with_vcx(|vcx| {
+            println!("Encoding function: {{ def_id: {:?}, name: {} }}", def_id, vcx.tcx().def_path_str(def_id));
             use mir::visit::Visitor;
 
             let substs = Self::get_substs(vcx, &task_key);

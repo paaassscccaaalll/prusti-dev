@@ -114,6 +114,11 @@ impl TaskEncoder for MirPureEnc {
 
         tracing::debug!("encoding {def_id:?}");
         let expr = vir::with_vcx(move |vcx| {
+            println!(
+                "Encoding function: {{ def_id: {:?}, name: {} }}",
+                def_id,
+                vcx.tcx().def_path_str(def_id)
+            );
             //let body = vcx.tcx().mir_promoted(local_def_id).0.borrow();
             let body = match kind {
                 PureKind::Closure => vcx
