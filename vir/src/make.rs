@@ -109,6 +109,9 @@ cfg_if! {
                            !matches!(ty, TypeData::Unsupported(_)) &&
                            bound_ty != ty
                          {
+                            panic!("Type mismatch for local variable {name}. \
+                                Scope assigns {name} to type {bound_ty:?}, but the actual type is {ty:?}.\
+                                Debug info: {debug_info}");
                             typecheck_error!(
                                 "Type mismatch for local variable {name}. \
                                 Scope assigns {name} to type {bound_ty:?}, but the actual type is {ty:?}.\
