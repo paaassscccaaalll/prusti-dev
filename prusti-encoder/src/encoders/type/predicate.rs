@@ -597,6 +597,8 @@ impl TaskEncoder for PredicateEnc {
                     super::kinds::str::predicate(*task_key, snap.clone(), deps, &mut builder)?,
                     None,
                 ),
+                TyKind::Slice(_) => return Ok(None),
+                TyKind::Array(_, _) => return Ok(None),
                 TyKind::Param(_) => unreachable!(),
                 _ => return Ok(None),
             };
@@ -631,6 +633,8 @@ impl TaskEncoder for PredicateEnc {
             TyKind::Never => unreachable!(),
             TyKind::Tuple(..) => unreachable!(),
             TyKind::Str => unreachable!(),
+            TyKind::Slice(_) => unreachable!(),
+            TyKind::Array(_, _) => unreachable!(),
             unsupported_type => todo!("type not supported: {unsupported_type:?}"),
         }
     }
