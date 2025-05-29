@@ -56,8 +56,6 @@ pub fn get_vir_base_name_kind<'tcx>(kind: &ty::TyKind<'tcx>, vcx: &vir::VirCtxt<
             }
         }
         TyKind::FnPtr(..) => String::from("FnPtr"),
-        TyKind::Slice(_) => String::from("Slice"),
-        TyKind::Array(_, _) => String::from("Array"),
         other => unimplemented!("get_vir_base_name for {:?}", other),
     }
 }
