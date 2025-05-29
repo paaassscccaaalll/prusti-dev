@@ -1227,15 +1227,11 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                     //mir::Rvalue::ShallowInitBox(Operand<'vir>, Ty<'vir>) => {}
                     //mir::Rvalue::CopyForDeref(Place<'vir>) => {}
                     other => {
-                        if let mir::Rvalue::Aggregate(box mir::AggregateKind::Closure(def_id, _), _) = other {
-                            let env_query = prusti_interface::environment::EnvQuery::new(self.vcx.tcx());
-                            if prusti_interface::utils::has_spec_only_attr(env_query.get_attributes(def_id))
-                                && prusti_interface::utils::has_prusti_attr(
-                                    env_query.get_attributes(def_id),
-                                    "loop_body_invariant_spec",
-                                )
-                            {
-                                println!("Skipping loop invariant closure rvalue at {location:?}");
+                        if let ty::TyKind::Closure(def_id, _) = rvalue_ty.kind(){
+                            let has_loop_spec = crate::encoders::spec::with_def_spec(|def_spec| {
+                                def_spec.get_loop_spec(def_id).is_some()
+                            });
+                            if has_loop_spec {
                                 return;
                             }
                         }
