@@ -7,7 +7,11 @@ use pcg::{
     r#loop::LoopId,
     utils::{maybe_old::MaybeOldPlace, maybe_remote::MaybeRemotePlace, Place, SnapshotLocation},
 };
-use prusti_rustc_interface::middle::mir;
+use prusti_rustc_interface::middle::{
+    mir,
+    ty::{self, TyKind},
+};
+use prusti_rustc_interface::span::def_id::DefId;
 
 use task_encoder::TaskEncoder;
 use vir::Reify;
@@ -15,8 +19,19 @@ use vir::Reify;
 use crate::encoders::{
     indirect::{IndirectKey, IndirectPredicatesEnc},
     rust_ty_predicates::{RustTyPredicatesEnc, RustTyPredicatesEncOutputRef},
+    rust_ty_snapshots::RustTySnapshotsEnc,
+    lifted::{
+        casters::CastTypePure,
+        rust_ty_cast::RustTyCastersEnc,
+    },
+    spec,
+    mir_pure::{MirPureEnc, MirPureEncTask, PureKind},
     ImpureEncVisitor,
 };
+
+// Import ExprRet type definition from mir_pure
+type ExprInput<'vir> = (DefId, &'vir [vir::Expr<'vir>]);
+type ExprRet<'vir> = vir::ExprGen<'vir, ExprInput<'vir>, vir::ExprKind<'vir>>;
 
 pub(super) enum WandOldOuter<'vir> {
     LetBind(Vec<(&'vir str, vir::Expr<'vir>)>),
@@ -91,6 +106,8 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             }
             inv.push(wand);
         }
+
+        self.collect_loop_invariants(&mut inv);
         self.vcx.alloc_slice(&inv)
     }
 
@@ -224,5 +241,165 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 self.vcx.mk_local_labelled_old_expr(expr, label)
             }
         }
+    }
+
+    fn collect_loop_invariants(&mut self, inv: &mut Vec<vir::Expr<'vir>>) {
+        for (_block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
+            for stmt in &block_data.statements {
+                if let mir::StatementKind::Assign(box (place, rvalue)) = &stmt.kind {
+                    if let mir::Rvalue::Aggregate(box mir::AggregateKind::Closure(cl_def_id, _), _) = rvalue {
+                        let is_loop_invariant = spec::with_def_spec(|def_spec| {
+                            if let Some(loop_spec) = def_spec.get_loop_spec(cl_def_id) {
+                                matches!(loop_spec, prusti_interface::specs::typed::LoopSpecification::Invariant(_))
+                            } else {
+                                false
+                            }
+                        });
+
+                        if is_loop_invariant {
+
+                            let invariant_expr = self.encode_loop_invariant_closure(*cl_def_id, *place);
+                            
+                            // Same unsafe transmute as in forall to convert ExprRet to ExprGen. Is there another way?
+                            let concrete_expr = unsafe {
+                                std::mem::transmute::<ExprRet<'_>, vir::ExprGen<'_, !, !>>(invariant_expr)
+                            };
+                            inv.push(concrete_expr);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn encode_loop_invariant_closure(&mut self, cl_def_id: DefId, closure_place: mir::Place<'vir>) -> ExprRet<'vir> {
+        let tcx = self.vcx.tcx();
+        
+        let closure_ty = tcx.type_of(cl_def_id).instantiate_identity();
+        
+        let (qvar_tys, _upvar_tys) = match closure_ty.kind() {
+            TyKind::Closure(_, cl_args) => (
+                match cl_args.as_closure().sig().skip_binder().inputs()[0].kind() {
+                    TyKind::Tuple(list) => list,
+                    _ => unreachable!(),
+                },
+                cl_args.as_closure().upvar_tys().iter().collect::<Vec<_>>(),
+            ),
+            _ => panic!("illegal loop invariant closure"),
+        };
+
+        let qvars = self.vcx.alloc_slice(
+            &qvar_tys
+                .iter()
+                .enumerate()
+                .map(|(idx, qvar_ty)| {
+                    let ty_out = self
+                        .deps
+                        .require_ref::<RustTySnapshotsEnc>(qvar_ty)
+                        .unwrap();
+                    self.vcx.mk_local_decl(
+                        vir::vir_format!(self.vcx, "qvar_{idx}"),
+                        ty_out.generic_snapshot.snapshot,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+
+
+        // Create a proper s_Ref_immutable of the closure variable
+        let closure_place_result = self.encode_place(closure_place.into());
+        
+        let ref_to_closure_ty = tcx.mk_ty_from_kind(TyKind::Ref(
+            tcx.lifetimes.re_erased,
+            closure_ty,
+            ty::Mutability::Not,
+        ));
+        let ref_to_closure_ty_out = self
+            .deps
+            .require_local::<RustTySnapshotsEnc>(ref_to_closure_ty)
+            .unwrap()
+            .generic_snapshot
+            .specifics
+            .expect_immref();
+            
+        // Create the closure argument for reify_args
+        // Instead of: make_concrete_s_test_Closure_0(s_Ref_immutable_value(s_Ref_immutable_cons(null, _9p)))
+        // We want: s_Ref_immutable_cons(null, make_generic_s_test_Closure_0(p_test_Closure_0_snap(_9p)))
+        
+        let mut reify_args = vec![];
+        
+        // Get the RustTyPredicatesEnc for the closure type to access the snapshot function
+        let closure_ty_out = self
+            .deps
+            .require_ref::<RustTyPredicatesEnc>(closure_ty)
+            .unwrap();
+            
+        // Get the cast functions to convert to generic if necessary
+        let cast = self
+            .deps
+            .require_local::<RustTyCastersEnc<CastTypePure>>(closure_ty)
+            .unwrap();
+        
+        // Apply the proper sequence:
+        // 1. Apply the closure snapshot function to the closure place
+        let closure_snapshot = closure_ty_out.ref_to_snap(self.vcx, closure_place_result.expr);
+        
+        // 2. Cast the snapshot to generic if necessary
+        let closure_generic_snapshot = cast.cast_to_generic_if_necessary(
+            self.vcx,
+            closure_snapshot
+        );
+        
+        // 3. Wrap it in s_Ref_immutable_cons
+        let closure_arg = ref_to_closure_ty_out.prim_to_snap.apply(
+            self.vcx,
+            [self.vcx.mk_null(), closure_generic_snapshot]
+        );
+        
+        reify_args.push(closure_arg);
+         reify_args.extend(
+             qvars
+                 .iter()
+                 .map(|qvar| self.vcx.mk_local_ex(qvar.name, qvar.ty)),
+         );
+
+        // TODO: recursively invoke MirPure encoder to encode
+        // the body of the closure; pass the closure as the
+        // variable to use, then closure access = tuple access
+        // (then hope to optimise this away later ...?)
+        use vir::Reify;
+        let body = self
+            .deps
+            .require_local::<MirPureEnc>(MirPureEncTask {
+                encoding_depth: 1, // Which depth should I use here?
+                kind: PureKind::Closure,
+                parent_def_id: cl_def_id,
+                param_env: tcx.param_env(cl_def_id),
+                substs: ty::List::identity_for_item(self.vcx.tcx(), cl_def_id),
+                caller_def_id: Some(self.def_id),
+            })
+            .unwrap()
+            .expr
+            // arguments to the closure are:
+            // - the closure itself  
+            // - the qvars
+            .reify(self.vcx, (cl_def_id, self.vcx.alloc_slice(&reify_args)))
+            .lift();
+
+        let bool = self
+            .deps
+            .require_local::<RustTySnapshotsEnc>(tcx.types.bool)
+            .unwrap()
+            .generic_snapshot
+            .specifics;
+        let bool = bool.expect_primitive();
+
+        // Return forall expression directly without the extra prim_to_snap wrapper
+        self.vcx.mk_forall_expr(
+            qvars,
+            &[], // TODO
+            bool.snap_to_prim.apply(self.vcx, [body]),
+        )
+
     }
 }
