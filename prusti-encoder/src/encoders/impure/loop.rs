@@ -244,6 +244,8 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     }
 
     fn collect_loop_invariants(&mut self, inv: &mut Vec<vir::Expr<'vir>>) {
+        let mut closure_assignments = Vec::new();
+        
         for (_block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
             for stmt in &block_data.statements {
                 if let mir::StatementKind::Assign(box (place, rvalue)) = &stmt.kind {
@@ -257,18 +259,28 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         });
 
                         if is_loop_invariant {
-
-                            let invariant_expr = self.encode_loop_invariant_closure(*cl_def_id, *place);
-                            
-                            // Same unsafe transmute as in forall to convert ExprRet to ExprGen. Is there another way?
-                            let concrete_expr = unsafe {
-                                std::mem::transmute::<ExprRet<'_>, vir::ExprGen<'_, !, !>>(invariant_expr)
-                            };
-                            inv.push(concrete_expr);
+                            closure_assignments.push((*place, *cl_def_id));
                         }
                     }
                 }
             }
+        }
+        
+        for (place, cl_def_id) in closure_assignments {
+            // Add access (Now there is this There might be insufficient permission to access p_test_Closure_0(_9p))
+            let (place_res, _snap, _, _) = self.encode_place_snap(place.into());
+            let closure_ty = place.ty(self.body, self.vcx.tcx()).ty;
+            let ty_out = self.deps.require_ref::<RustTyPredicatesEnc>(closure_ty).unwrap();
+            let pred = ty_out.ref_to_pred(self.vcx, place_res.expr, Some(self.vcx.mk_wildcard()));
+            inv.push(pred);
+
+            let invariant_expr = self.encode_loop_invariant_closure(cl_def_id, place);
+            
+            // Same unsafe transmute as in forall to convert ExprRet to ExprGen. Is there another way?
+            let concrete_expr = unsafe {
+                std::mem::transmute::<ExprRet<'_>, vir::ExprGen<'_, !, !>>(invariant_expr)
+            };
+            inv.push(concrete_expr);
         }
     }
 
@@ -306,7 +318,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         );
 
 
-        // Create a proper s_Ref_immutable of the closure variable
         let closure_place_result = self.encode_place(closure_place.into());
         
         let ref_to_closure_ty = tcx.mk_ty_from_kind(TyKind::Ref(
@@ -322,35 +333,26 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             .specifics
             .expect_immref();
             
-        // Create the closure argument for reify_args
-        // Instead of: make_concrete_s_test_Closure_0(s_Ref_immutable_value(s_Ref_immutable_cons(null, _9p)))
-        // We want: s_Ref_immutable_cons(null, make_generic_s_test_Closure_0(p_test_Closure_0_snap(_9p)))
-        
         let mut reify_args = vec![];
         
-        // Get the RustTyPredicatesEnc for the closure type to access the snapshot function
         let closure_ty_out = self
             .deps
             .require_ref::<RustTyPredicatesEnc>(closure_ty)
             .unwrap();
             
-        // Get the cast functions to convert to generic if necessary
         let cast = self
             .deps
             .require_local::<RustTyCastersEnc<CastTypePure>>(closure_ty)
             .unwrap();
         
-        // Apply the proper sequence:
-        // 1. Apply the closure snapshot function to the closure place
         let closure_snapshot = closure_ty_out.ref_to_snap(self.vcx, closure_place_result.expr);
         
-        // 2. Cast the snapshot to generic if necessary
         let closure_generic_snapshot = cast.cast_to_generic_if_necessary(
             self.vcx,
             closure_snapshot
         );
         
-        // 3. Wrap it in s_Ref_immutable_cons
+        // Wrap it in s_Ref_immutable_cons
         let closure_arg = ref_to_closure_ty_out.prim_to_snap.apply(
             self.vcx,
             [self.vcx.mk_null(), closure_generic_snapshot]
@@ -394,7 +396,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             .specifics;
         let bool = bool.expect_primitive();
 
-        // Return forall expression directly without the extra prim_to_snap wrapper
         self.vcx.mk_forall_expr(
             qvars,
             &[], // TODO
