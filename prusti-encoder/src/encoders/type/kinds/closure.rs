@@ -9,6 +9,7 @@ use crate::encoders::{
 };
 use prusti_rustc_interface::middle::ty;
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
+use vir::CallableIdent;
 
 pub(crate) fn domain<'vir>(
     task_key: <DomainEnc as TaskEncoder>::TaskKey<'vir>,
@@ -29,8 +30,51 @@ pub(crate) fn domain<'vir>(
         .map(|ty| FieldTy::from_ty(builder.vcx, deps, ty))
         .collect::<Result<Vec<_>, _>>()?;
 
+    let has_ref_immutable = fields.iter().any(|field| {
+        match field.ty {
+            vir::TypeData::Domain(domain_name, _) => domain_name.contains("s_Ref_immutable"),
+            _ => false,
+        }
+    });
+
     let (field_snaps_to_snap, field_access, _) =
         super::structlike::domain("", &fields, task_key, output_ref, &[], deps, builder)?;
+
+    if has_ref_immutable {
+        let ref_type = &vir::TypeData::Ref;
+        let param_type = builder.vcx.alloc(vir::TypeData::Domain("s_Param", &[]));
+        let type_type = builder.vcx.alloc(vir::TypeData::Domain("Type", &[]));
+        let ref_immutable_type = builder.vcx.alloc(vir::TypeData::Domain("s_Ref_immutable", &[]));
+        
+        let cons_func = vir::FunctionIdent::new(
+            vir::ViperIdent::new("s_Ref_immutable_cons"),
+            vir::UnknownArity::new(builder.vcx.alloc_slice(&[ref_type, param_type])),
+            ref_immutable_type,
+        );
+        
+        let typeof_func = vir::FunctionIdent::new(
+            vir::ViperIdent::new("s_Ref_immutable_typeof"),
+            vir::UnknownArity::new(builder.vcx.alloc_slice(&[ref_immutable_type])),
+            type_type,
+        );
+        
+        let typ_func = vir::FunctionIdent::new(
+            vir::ViperIdent::new("typ"),
+            vir::UnknownArity::new(builder.vcx.alloc_slice(&[param_type])),
+            type_type,
+        );
+        
+        let type_func = vir::FunctionIdent::new(
+            vir::ViperIdent::new("s_Ref_immutable_type"),
+            vir::UnknownArity::new(builder.vcx.alloc_slice(&[type_type])),
+            type_type,
+        );
+
+        builder.axiom("ref_immutable_cons_typeof", vir::expr! {
+            forall r: [ref_type], p: [param_type] :: {[typeof_func]([cons_func](r, p))} 
+                ([typeof_func]([cons_func](r, p))) == ([type_func]([typ_func](p)))
+        });
+    }
 
     Ok(DomainEncSpecifics::StructLike(DomainDataStruct {
         field_snaps_to_snap,
