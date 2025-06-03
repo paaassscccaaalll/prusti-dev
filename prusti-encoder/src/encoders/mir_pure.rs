@@ -1061,7 +1061,6 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         .iter()
                         .map(|qvar| self.vcx.mk_local_ex(qvar.name, qvar.ty)),
                 );
-
                 // TODO: recursively invoke MirPure encoder to encode
                 // the body of the closure; pass the closure as the
                 // variable to use, then closure access = tuple access
