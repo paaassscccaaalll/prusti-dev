@@ -1231,6 +1231,7 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                                 def_spec.get_loop_spec(def_id).is_some()
                             });
                             if has_loop_spec {
+                                // do we need the permissions here?
                                 return;
                             }
                         }

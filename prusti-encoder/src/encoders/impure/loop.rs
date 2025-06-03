@@ -267,7 +267,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
         
         for (place, cl_def_id) in closure_assignments {
-            // Add access (Now there is this There might be insufficient permission to access p_test_Closure_0(_9p))
+            // Add access (Now there is this there might be insufficient permission to access p_test_Closure_0(_9p))
             let (place_res, _snap, _, _) = self.encode_place_snap(place.into());
             let closure_ty = place.ty(self.body, self.vcx.tcx()).ty;
             let ty_out = self.deps.require_ref::<RustTyPredicatesEnc>(closure_ty).unwrap();
