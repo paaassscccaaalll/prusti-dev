@@ -1035,20 +1035,32 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     .deps
                     .require_local::<RustTyCastersEnc<CastTypePure>>(closure_ty)
                     .unwrap();
-                reify_args.push(
-                    cast.cast_to_concrete_if_possible(
-                        self.vcx,
-                        ref_to_closure_ty_out
-                            .value_access
-                            .apply(self.vcx, [closure_ref]),
-                    ),
-                );
+                let has_ref_upvars = match closure_ty.kind() {
+                    TyKind::Closure(_, cl_args) => {
+                        cl_args.as_closure().upvar_tys().iter().any(|upvar_ty| {
+                            matches!(upvar_ty.kind(), ty::TyKind::Ref(_, _, _))
+                        })
+                    }
+                    _ => false,
+                };
+                if !(has_ref_upvars) {
+                    reify_args.push(
+                        cast.cast_to_concrete_if_possible(
+                            self.vcx,
+                            ref_to_closure_ty_out 
+                                .value_access
+                                .apply(self.vcx, [closure_ref]),
+                        ),
+                    );
+                } else {
+                    reify_args.push(closure_ref)
+                }
                 reify_args.extend(
                     qvars
                         .iter()
                         .map(|qvar| self.vcx.mk_local_ex(qvar.name, qvar.ty)),
                 );
-
+                
                 // TODO: recursively invoke MirPure encoder to encode
                 // the body of the closure; pass the closure as the
                 // variable to use, then closure access = tuple access
