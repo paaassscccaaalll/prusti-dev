@@ -114,11 +114,6 @@ impl TaskEncoder for MirPureEnc {
 
         tracing::debug!("encoding {def_id:?}");
         let expr = vir::with_vcx(move |vcx| {
-            println!(
-                "Encoding function: {{ def_id: {:?}, name: {} }}",
-                def_id,
-                vcx.tcx().def_path_str(def_id)
-            );
             //let body = vcx.tcx().mir_promoted(local_def_id).0.borrow();
             let body = match kind {
                 PureKind::Closure => vcx
@@ -1035,7 +1030,6 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     .deps
                     .require_local::<RustTyCastersEnc<CastTypePure>>(closure_ty)
                     .unwrap();
-                
                 let has_ref_upvars = match closure_ty.kind() {
                     TyKind::Closure(_, cl_args) => {
                         cl_args.as_closure().upvar_tys().iter().any(|upvar_ty| {
@@ -1061,6 +1055,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                         .iter()
                         .map(|qvar| self.vcx.mk_local_ex(qvar.name, qvar.ty)),
                 );
+                
                 // TODO: recursively invoke MirPure encoder to encode
                 // the body of the closure; pass the closure as the
                 // variable to use, then closure access = tuple access
