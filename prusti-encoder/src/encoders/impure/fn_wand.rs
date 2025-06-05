@@ -363,10 +363,12 @@ impl TaskEncoder for WandEnc {
 
             for pred in rbp {
                 let GenericKind::Param(b) = pred.0 else {
-                    todo!("region bound pair: {pred:?}");
+                    //todo!("region bound pair: {pred:?}");
+                    continue;
                 };
                 let ty::RegionKind::ReEarlyParam(a) = pred.1.kind() else {
-                    todo!("region bound pair: {pred:?}");
+                    //todo!("region bound pair: {pred:?}");
+                    continue;
                 };
                 insert_edge(IndirectKey::Early(a), IndirectKey::Param(b));
             }
