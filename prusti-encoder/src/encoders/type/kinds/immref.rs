@@ -7,7 +7,7 @@ use crate::encoders::{
 };
 use prusti_rustc_interface::middle::ty;
 use task_encoder::{EncodeFullError, TaskEncoder, TaskEncoderDependencies};
-use vir::ToKnownArity;
+use vir::{ToKnownArity, CallableIdent};
 
 pub(crate) fn domain<'vir>(
     task_key: <DomainEnc as TaskEncoder>::TaskKey<'vir>,
@@ -24,10 +24,34 @@ pub(crate) fn domain<'vir>(
     let inner_type = inner_ty_out.generic_snapshot.snapshot;
 
     let prim_type = &vir::TypeData::Ref;
+    let param_type = &vir::TypeData::Domain("s_Param", &[]);
+    let type_type = &vir::TypeData::Domain("Type", &[]);
+    let ref_immutable_type = &vir::TypeData::Domain("s_Ref_immutable", &[]);
 
     let deref_ident = builder.function("deref", &[builder.self_type()], prim_type);
     let value_ident = builder.function("value", &[builder.self_type()], inner_type);
     let cons_ident = builder.function("cons", &[prim_type, inner_type], builder.self_type());
+
+    let ref_immutable_cons_func = vir::FunctionIdent::new(
+        vir::ViperIdent::new("s_Ref_immutable_cons"),
+        vir::UnknownArity::new(builder.vcx.alloc_slice(&[prim_type, param_type])),
+        ref_immutable_type,
+    );
+    let ref_immutable_typeof_func = vir::FunctionIdent::new(
+        vir::ViperIdent::new("s_Ref_immutable_typeof"),
+        vir::UnknownArity::new(builder.vcx.alloc_slice(&[ref_immutable_type])),
+        type_type,
+    );
+    let typ_func = vir::FunctionIdent::new(
+        vir::ViperIdent::new("typ"),
+        vir::UnknownArity::new(builder.vcx.alloc_slice(&[param_type])),
+        type_type,
+    );
+    let ref_immutable_type_func = vir::FunctionIdent::new(
+        vir::ViperIdent::new("s_Ref_immutable_type"),
+        vir::UnknownArity::new(builder.vcx.alloc_slice(&[type_type])),
+        type_type,
+    );
 
     builder.axiom("deref", vir::expr! {
         forall r: [prim_type], value: [inner_type] :: {[cons_ident](r, value)} ([deref_ident]([cons_ident](r, value))) == (r)
@@ -35,6 +59,11 @@ pub(crate) fn domain<'vir>(
     builder.axiom("value", vir::expr! {
         forall r: [prim_type], value: [inner_type] :: {[cons_ident](r, value)} ([value_ident]([cons_ident](r, value))) == (value)
     });
+    builder.axiom("ref_immutable_cons_typeof", vir::expr! {
+        forall r: [prim_type], p: [param_type] :: {[ref_immutable_typeof_func]([ref_immutable_cons_func](r, p))} 
+            ([ref_immutable_typeof_func]([ref_immutable_cons_func](r, p))) == ([ref_immutable_type_func]([typ_func](p)))
+    });
+    
     // builder.axiom("cons", vir::expr! {
     //     forall s: [builder.self_type()] :: {[deref_ident](s)} ([cons_ident]([deref_ident](s))) == (s)
     // });
