@@ -62,6 +62,7 @@ pub enum PureKind {
     Spec,
     Pure,
     Constant(mir::Promoted),
+    LoopInvariantClosure, // New variant for loop invariant closures
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -126,6 +127,9 @@ impl TaskEncoder for MirPureEnc {
                 PureKind::Constant(promoted) => {
                     vcx.body_mut().get_promoted_constant_body(def_id, promoted)
                 }
+                PureKind::LoopInvariantClosure => vcx // Loop invariant closures are still closures MIR-wise
+                    .body_mut()
+                    .get_closure_body(def_id, substs, caller_def_id),
             };
 
             let expr_inner = Enc::new(
@@ -653,6 +657,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     .require_local::<RustTyCastersEnc<CastTypePure>>(place_ty)
                     .unwrap();
                 // The snapshot of the referenced value should be encoded as a generic `Param`
+                // If it is not a type parameter, we cast it to its concrete Snapshot.
                 let snap = cast.cast_to_generic_if_necessary(self.vcx, snap);
                 if kind.mutability().is_mut() {
                     let e_rvalue_ty = rvalue_snapshot_encoding
@@ -1257,7 +1262,7 @@ fn encode_place_with_ref<'vir, 'enc>(
     // TODO: factor this out (duplication with impure encoder)?
     for elem in place.projection {
         (expr, place_ref) = self.encode_place_element(place_ty, elem, expr, place_ref);
-        place_ty = place_ty.projection_ty(self.vcx.tcx(), elem);
+        place_ty = place_ty.projection_ty(vcx.tcx(), elem);
     }
     // Can we ever have the use of a projected place?
     assert!(place_ty.variant_index.is_none());

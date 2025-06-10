@@ -1231,13 +1231,21 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                                 def_spec.get_loop_spec(def_id).is_some()
                             });
                             if has_loop_spec {
-                                // do we need the permissions here?
-                                return;
+                                // For spec-only loop invariant closures, we need to construct the closure properly
+                                // instead of returning early. This ensures proper permission initialization.
+                                let e_rvalue_ty = self.deps.require_ref::<RustTyPredicatesEnc>(rvalue_ty).unwrap();
+                                let sl = e_rvalue_ty.generic_predicate.expect_structlike();
+                                
+                                // For closures, there are no field operands in the rvalue, so we construct with empty fields
+                                sl.snap_data.field_snaps_to_snap.apply(self.vcx, self.vcx.alloc_slice(&[]))
+                            } else {
+                                tracing::error!("unsupported rvalue {other:?}");
+                                self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
                             }
+                        } else {
+                            tracing::error!("unsupported rvalue {other:?}");
+                            self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
                         }
-                        
-                        tracing::error!("unsupported rvalue {other:?}");
-                        self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
                     }
                 };
 
