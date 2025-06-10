@@ -608,7 +608,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         self.pcg_actions(pcg_state, succ.actions(), edge_to_loop);
     }
 
-    fn encode_operand_snap(&mut self, operand: &mir::Operand<'vir>) -> vir::Expr<'vir> {
+    pub(crate) fn encode_operand_snap(&mut self, operand: &mir::Operand<'vir>) -> vir::Expr<'vir> {
         match operand {
             &mir::Operand::Move(source) => {
                 let (result, snap_val, _, ty_out) = self.encode_place_snap(Place::from(source));
@@ -707,7 +707,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
 
     /// Encodes the snapshot of an operand. This should not be used for encoding
     /// regular mir statements/terminators as it doesn't match the semantics.
-    fn encode_operand_snap_immediate(&mut self, operand: &mir::Operand<'vir>) -> vir::Expr<'vir> {
+    pub(crate) fn encode_operand_snap_immediate(&mut self, operand: &mir::Operand<'vir>) -> vir::Expr<'vir> {
         match operand {
             &mir::Operand::Move(source) => self.encode_place_snap(Place::from(source)).1,
             &mir::Operand::Copy(source) => self.encode_place_snap(Place::from(source)).1,
@@ -1226,20 +1226,27 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                     //mir::Rvalue::ShallowInitBox(Operand<'vir>, Ty<'vir>) => {}
                     //mir::Rvalue::CopyForDeref(Place<'vir>) => {}
                     other => {
-                        if let ty::TyKind::Closure(def_id, _) = rvalue_ty.kind(){
-                            let has_loop_spec = crate::encoders::spec::with_def_spec(|def_spec| {
-                                def_spec.get_loop_spec(def_id).is_some()
-                            });
-                            if has_loop_spec {
-                                // For spec-only loop invariant closures, we need to construct the closure properly
-                                // instead of returning early. This ensures proper permission initialization.
-                                let e_rvalue_ty = self.deps.require_ref::<RustTyPredicatesEnc>(rvalue_ty).unwrap();
-                                let sl = e_rvalue_ty.generic_predicate.expect_structlike();
+                        // Handle closure aggregates (including loop spec closures)
+                        if let ty::TyKind::Closure(def_id, _) = rvalue_ty.kind() {
+                            if let mir::Rvalue::Aggregate(box mir::AggregateKind::Closure(_cl_def_id, _cl_args), ref upvar_operands) = other {
+                                // Check if this is a loop spec closure
+                                let has_loop_spec = crate::encoders::spec::with_def_spec(|def_spec| {
+                                    def_spec.get_loop_spec(def_id).is_some()
+                                });
                                 
-                                // For closures, there are no field operands in the rvalue, so we construct with empty fields
-                                sl.snap_data.field_snaps_to_snap.apply(self.vcx, self.vcx.alloc_slice(&[]))
+                                if has_loop_spec {
+                                    // For loop spec closures, we skip creating the closure object entirely
+                                    // since upvar access is now handled through the tuple approach in loop invariants.
+                                    // We create a dummy/placeholder value that won't be used.
+                                    // self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "loop_spec_closure_placeholder"))
+                                    return;
+                                } else {
+                                    // Regular closure handling would go here if needed
+                                    tracing::error!("unsupported closure rvalue {other:?}");
+                                    self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
+                                }
                             } else {
-                                tracing::error!("unsupported rvalue {other:?}");
+                                tracing::error!("unsupported closure rvalue {other:?}");
                                 self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
                             }
                         } else {

@@ -295,7 +295,10 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
     }
 
-    fn encode_loop_invariant_closure(&mut self, cl_def_id: DefId, cl_args: ty::GenericArgsRef<'vir>, upvar_operands: &[mir::Operand<'vir>]) -> ExprRet<'vir> {
+    fn encode_loop_invariant_closure(&mut self, cl_def_id: DefId, _cl_args: ty::GenericArgsRef<'vir>, upvar_operands: &[mir::Operand<'vir>]) -> ExprRet<'vir> {
+        println!("LOOP.RS: encode_loop_invariant_closure for cl_def_id: {:?}", cl_def_id);
+        dbg!(&upvar_operands);
+        
         let tcx = self.vcx.tcx();
         
         let closure_ty = tcx.type_of(cl_def_id).instantiate_identity();
@@ -328,13 +331,15 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 .collect::<Vec<_>>(),
         );
 
-        // Create upvar tuple from the operands
+        // Create upvar tuple from the operands - ensure self-contained expressions
         let mut upvar_snaps = Vec::new();
         for (idx, upvar_operand) in upvar_operands.iter().enumerate() {
-            // Use the trait method to encode operand
-            use crate::encoder_traits::pure_func_app_enc::PureFuncAppEnc;
-            let upvar_snap = self.encode_operand(&(), upvar_operand);
+            // Use encode_operand_snap_immediate to get self-contained expressions without tmp variables
+            let upvar_snap = self.encode_operand_snap_immediate(upvar_operand);
             let upvar_ty = upvar_tys[idx];
+            println!("LOOP.RS: For upvar_operand {:?}, corresponding upvar_ty: {:?}, generated direct_snap_expr.ty(): {:?}", 
+                     upvar_operand, upvar_ty, upvar_snap.ty());
+            
             let cast = self
                 .deps
                 .require_local::<RustTyCastersEnc<CastTypePure>>(upvar_ty)
@@ -349,6 +354,8 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             .require_local::<crate::encoders::ViperTupleEnc>(upvar_snaps.len())
             .unwrap();
         let upvar_tuple = tuple_enc.mk_cons(self.vcx, &upvar_snaps);
+        
+        println!("LOOP.RS: Constructed upvar_tuple_expr.ty(): {:?}", upvar_tuple.ty());
 
         let mut reify_args = vec![upvar_tuple];
         reify_args.extend(
@@ -356,6 +363,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 .iter()
                 .map(|qvar| self.vcx.mk_local_ex(qvar.name, qvar.ty)),
         );
+        
+        println!("LOOP.RS: Final reify_args for MirPureEnc({:?}): count = {}, first arg type: {:?}", 
+                 cl_def_id, reify_args.len(), if !reify_args.is_empty() { Some(reify_args[0].ty()) } else { None });
 
         // Encode the closure body using MirPureEnc
         use vir::Reify;

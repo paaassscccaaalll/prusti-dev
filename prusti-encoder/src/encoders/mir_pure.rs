@@ -63,6 +63,7 @@ pub enum PureKind {
     Pure,
     Constant(mir::Promoted),
     LoopInvariantClosure, // New variant for loop invariant closures
+    SpecOnlyLoopInvariantBody, // New variant for spec-only loop invariant body
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -130,6 +131,9 @@ impl TaskEncoder for MirPureEnc {
                 PureKind::LoopInvariantClosure => vcx // Loop invariant closures are still closures MIR-wise
                     .body_mut()
                     .get_closure_body(def_id, substs, caller_def_id),
+                PureKind::SpecOnlyLoopInvariantBody => vcx // Spec-only loop invariant body is also a closure MIR-wise
+                    .body_mut()
+                    .get_closure_body(def_id, substs, caller_def_id),
             };
 
             let expr_inner = Enc::new(
@@ -137,6 +141,7 @@ impl TaskEncoder for MirPureEnc {
                 cfg!(feature = "mono_function_encoding"),
                 task_key.0,
                 def_id,
+                kind,
                 &body,
                 deps,
             )
@@ -207,6 +212,7 @@ struct Enc<'vir: 'enc, 'enc> {
     vcx: &'vir vir::VirCtxt<'vir>,
     encoding_depth: usize,
     def_id: DefId,
+    kind: PureKind,
     body: &'enc mir::Body<'vir>,
     rev_doms: rev_doms::ReverseDominators,
     deps: &'enc mut TaskEncoderDependencies<'vir, MirPureEnc>,
@@ -259,6 +265,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         monomorphize: bool,
         encoding_depth: usize,
         def_id: DefId,
+        kind: PureKind,
         body: &'enc mir::Body<'vir>,
         deps: &'enc mut TaskEncoderDependencies<'vir, MirPureEnc>,
     ) -> Self {
@@ -272,6 +279,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             vcx,
             encoding_depth,
             def_id,
+            kind,
             body,
             rev_doms,
             deps,
@@ -399,15 +407,92 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
     fn encode_body(&mut self) -> ExprRet<'vir> {
         let mut init = Update::new();
         init.versions.insert(mir::RETURN_PLACE, 0);
-        for local in 1..=self.body.arg_count {
-            let local_ex = self.vcx.mk_lazy_expr(
-                vir::vir_format!(self.vcx, "pure in _{local}"),
-                self.get_ty_for_local(local.into()),
-                Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[local - 1].kind),
-            );
-            init.binds
-                .push(UpdateBind::Local(local.into(), 0, local_ex));
-            init.versions.insert(local.into(), 0);
+        
+        if self.kind == PureKind::SpecOnlyLoopInvariantBody {
+            // Special handling for spec-only loop invariant body
+            println!("MIR_PURE.RS: Enc::encode_body for SpecOnlyLoopInvariantBody, self.def_id (cl_def_id): {:?}", self.def_id);
+            println!("MIR_PURE.RS:   cl_def_id MIR body.arg_count: {}", self.body.arg_count);
+            for (lc_idx, decl) in self.body.local_decls.iter_enumerated() {
+                println!("MIR_PURE.RS:     cl_def_id LocalDecl[{}]: type {:?}", lc_idx.as_usize(), decl.ty);
+            }
+            
+            // Get upvar information from the closure type
+            let closure_ty = self.vcx.tcx().type_of(self.def_id).instantiate_identity();
+            let upvar_tys = match closure_ty.kind() {
+                TyKind::Closure(_, cl_args) => cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
+            let num_upvars = upvar_tys.len();
+            
+            // Get the upvar tuple encoder for extracting elements
+            let tuple_enc = self
+                .deps
+                .require_local::<crate::encoders::ViperTupleEnc>(num_upvars)
+                .unwrap();
+            
+            // Bind each upvar from cl_def_id's MIR to the corresponding tuple element
+            for k in 0..num_upvars {
+                let mir_local_for_upvar_k = mir::Local::from_usize(k + 1); // cl_def_id's MIR Local(1) = upvar0, Local(2) = upvar1, etc.
+                let upvar_ty = upvar_tys[k];
+                
+                // Create expression: extract k-th element from upvar tuple and cast to concrete type
+                // We create the expression immediately to avoid borrowing issues
+                let upvar_elem_expr = {
+                    let elem_tuple_expr = self.vcx.mk_lazy_expr(
+                        vir::vir_format!(self.vcx, "upvar_tuple_arg"),
+                        tuple_enc.snapshot().unwrap_or_else(|| {
+                            self.deps
+                                .require_ref::<GenericEnc>(())
+                                .unwrap()
+                                .param_snapshot
+                        }),
+                        Box::new(move |_vcx, lctx: ExprInput<'vir>| {
+                            println!("MIR_PURE.RS: encode_body - Binding cl_def_id MIR Local({}) to reify_args[0] (upvar_tuple). Type from lctx: {:?}", k + 1, lctx.1[0].ty());
+                            lctx.1[0].kind
+                        }),
+                    );
+                    tuple_enc.mk_elem(self.vcx, elem_tuple_expr, k)
+                };
+                
+                // Cast to concrete type if necessary
+                let cast = self
+                    .deps
+                    .require_local::<RustTyCastersEnc<CastTypePure>>(upvar_ty)
+                    .unwrap();
+                let upvar_concrete_expr = cast.cast_to_concrete_if_possible(self.vcx, upvar_elem_expr);
+                
+                // Bind this upvar MIR local to the concrete expression
+                init.binds.push(UpdateBind::Local(mir_local_for_upvar_k, 0, upvar_concrete_expr));
+                init.versions.insert(mir_local_for_upvar_k, 0);
+            }
+            
+            // Handle qvars (subsequent arguments after the upvar tuple)
+            // qvars start from cl_def_id's MIR Local(num_upvars + 1)
+            let num_qvars = self.body.arg_count.saturating_sub(num_upvars);
+            for qvar_idx in 0..num_qvars {
+                let mir_local_for_qvar = mir::Local::from_usize(num_upvars + 1 + qvar_idx);
+                let qvar_arg_idx = 1 + qvar_idx; // lctx.1[1], lctx.1[2], etc.
+                
+                let qvar_ex = self.vcx.mk_lazy_expr(
+                    vir::vir_format!(self.vcx, "pure in _qvar_{qvar_idx}"), 
+                    self.get_ty_for_local(mir_local_for_qvar),
+                    Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[qvar_arg_idx].kind),
+                );
+                init.binds.push(UpdateBind::Local(mir_local_for_qvar, 0, qvar_ex));
+                init.versions.insert(mir_local_for_qvar, 0);
+            }
+        } else {
+            // Normal handling for other pure kinds
+            for local in 1..=self.body.arg_count {
+                let local_ex = self.vcx.mk_lazy_expr(
+                    vir::vir_format!(self.vcx, "pure in _{local}"),
+                    self.get_ty_for_local(local.into()),
+                    Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[local - 1].kind),
+                );
+                init.binds
+                    .push(UpdateBind::Local(local.into(), 0, local_ex));
+                init.versions.insert(local.into(), 0);
+            }
         }
 
         let update = self.encode_cfg(&init.versions, mir::START_BLOCK, self.rev_doms.end);
@@ -691,6 +776,10 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             // Len
             // Cast
             mir::Rvalue::BinaryOp(op, box (l, r)) => {
+                if self.kind == PureKind::SpecOnlyLoopInvariantBody {
+                    println!("MIR_PURE.RS: Encoding BinaryOp (SpecOnly): {:?}. LHS MIR: {:?}, RHS MIR: {:?}", op, l, r);
+                }
+                
                 let l_ty = l.ty(self.body, self.vcx.tcx());
                 let r_ty = r.ty(self.body, self.vcx.tcx());
                 use crate::encoders::MirBuiltinEncTask::{BinOp, CheckedBinOp};
@@ -704,12 +793,18 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                     .require_ref::<MirBuiltinEnc>(task)
                     .unwrap()
                     .function;
+                
+                let viper_expr_for_lhs = self.encode_operand(curr_ver, l);
+                let viper_expr_for_rhs = self.encode_operand(curr_ver, r);
+                
+                if self.kind == PureKind::SpecOnlyLoopInvariantBody {
+                    println!("MIR_PURE.RS:   Viper expr for LHS: type {:?}", viper_expr_for_lhs.ty());
+                    println!("MIR_PURE.RS:   Viper expr for RHS: type {:?}", viper_expr_for_rhs.ty());
+                }
+                
                 binop_function.apply(
                     self.vcx,
-                    &[
-                        self.encode_operand(curr_ver, l),
-                        self.encode_operand(curr_ver, r),
-                    ],
+                    &[viper_expr_for_lhs, viper_expr_for_rhs],
                 )
             }
             // NullaryOp
@@ -832,6 +927,12 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
     ) -> (ExprRet<'vir>, Option<ExprRet<'vir>>) {
         // TODO: remove (debug)
         assert!(curr_ver.contains_key(&place.local));
+        
+        if self.kind == PureKind::SpecOnlyLoopInvariantBody {
+            println!("MIR_PURE.RS: encode_place_with_ref (SpecOnly) for place: {:?}, MIR type: {:?}", 
+                     place, self.body.local_decls[place.local].ty);
+            println!("MIR_PURE.RS:   Current version for place.local: {:?}", curr_ver.get(&place.local));
+        }
 
         let mut place_ty = mir::tcx::PlaceTy::from_ty(self.body.local_decls[place.local].ty);
 
@@ -856,7 +957,13 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         let mut place_ref = None;
         // TODO: factor this out (duplication with impure encoder)?
         for elem in place.projection {
+            if self.kind == PureKind::SpecOnlyLoopInvariantBody && matches!(elem, mir::ProjectionElem::Deref) {
+                println!("MIR_PURE.RS: encode_place_element DEREF (SpecOnly) on expr of type: {:?}", expr.ty());
+            }
             (expr, place_ref) = self.encode_place_element(place_ty, elem, expr, place_ref);
+            if self.kind == PureKind::SpecOnlyLoopInvariantBody && matches!(elem, mir::ProjectionElem::Deref) {
+                println!("MIR_PURE.RS:   After DEREF processing: expr type {:?}", expr.ty());
+            }
             place_ty = place_ty.projection_ty(self.vcx.tcx(), elem);
         }
         // Can we ever have the use of a projected place?
