@@ -1229,30 +1229,17 @@ impl<'vir, 'enc, E: TaskEncoder> mir::visit::Visitor<'vir> for ImpureEncVisitor<
                         // Handle closure aggregates (including loop spec closures)
                         if let ty::TyKind::Closure(def_id, _) = rvalue_ty.kind() {
                             if let mir::Rvalue::Aggregate(box mir::AggregateKind::Closure(_cl_def_id, _cl_args), ref upvar_operands) = other {
-                                // Check if this is a loop spec closure
                                 let has_loop_spec = crate::encoders::spec::with_def_spec(|def_spec| {
                                     def_spec.get_loop_spec(def_id).is_some()
                                 });
-                                
                                 if has_loop_spec {
-                                    // For loop spec closures, we skip creating the closure object entirely
-                                    // since upvar access is now handled through the tuple approach in loop invariants.
-                                    // We create a dummy/placeholder value that won't be used.
-                                    // self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "loop_spec_closure_placeholder"))
                                     return;
-                                } else {
-                                    // Regular closure handling would go here if needed
-                                    tracing::error!("unsupported closure rvalue {other:?}");
-                                    self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
-                                }
-                            } else {
-                                tracing::error!("unsupported closure rvalue {other:?}");
-                                self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
+                                } 
                             }
-                        } else {
-                            tracing::error!("unsupported rvalue {other:?}");
-                            self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
                         }
+                        tracing::error!("unsupported rvalue {other:?}");
+                        self.vcx.mk_todo_expr(vir::vir_format!(self.vcx, "rvalue {rvalue:?}"))
+                        
                     }
                 };
 

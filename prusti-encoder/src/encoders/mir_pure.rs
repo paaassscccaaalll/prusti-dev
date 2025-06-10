@@ -62,8 +62,7 @@ pub enum PureKind {
     Spec,
     Pure,
     Constant(mir::Promoted),
-    LoopInvariantClosure, // New variant for loop invariant closures
-    SpecOnlyLoopInvariantBody, // New variant for spec-only loop invariant body
+    SpecOnlyLoopInvariantBody,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -128,10 +127,7 @@ impl TaskEncoder for MirPureEnc {
                 PureKind::Constant(promoted) => {
                     vcx.body_mut().get_promoted_constant_body(def_id, promoted)
                 }
-                PureKind::LoopInvariantClosure => vcx // Loop invariant closures are still closures MIR-wise
-                    .body_mut()
-                    .get_closure_body(def_id, substs, caller_def_id),
-                PureKind::SpecOnlyLoopInvariantBody => vcx // Spec-only loop invariant body is also a closure MIR-wise
+                PureKind::SpecOnlyLoopInvariantBody => vcx 
                     .body_mut()
                     .get_closure_body(def_id, substs, caller_def_id),
             };
@@ -416,65 +412,49 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 println!("MIR_PURE.RS:     cl_def_id LocalDecl[{}]: type {:?}", lc_idx.as_usize(), decl.ty);
             }
             
-            // Get upvar information from the closure type
+            // Calculate the correct Viper type for the upvar tuple
             let closure_ty = self.vcx.tcx().type_of(self.def_id).instantiate_identity();
-            let upvar_tys = match closure_ty.kind() {
-                TyKind::Closure(_, cl_args) => cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>(),
-                _ => Vec::new(),
+            let correct_viper_type_for_upvar_tuple = if let TyKind::Closure(_, cl_args) = closure_ty.kind() {
+                let upvar_tys = cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>();
+                let num_upvars = upvar_tys.len();
+                
+                if num_upvars > 0 {
+                    // Each upvar becomes s_Param after snapshotting and casting
+                    let tuple_encoder = self.deps.require_local::<crate::encoders::ViperTupleEnc>(num_upvars).unwrap();
+                    tuple_encoder.snapshot().unwrap_or_else(|| {
+                        // Fallback to generic param type
+                        self.deps.require_ref::<GenericEnc>(()).unwrap().param_snapshot
+                    })
+                } else {
+                    // No upvars, use unit type
+                    self.deps.require_ref::<GenericEnc>(()).unwrap().param_snapshot
+                }
+            } else {
+                // Fallback to generic param type
+                self.deps.require_ref::<GenericEnc>(()).unwrap().param_snapshot
             };
-            let num_upvars = upvar_tys.len();
             
-            // Get the upvar tuple encoder for extracting elements
-            let tuple_enc = self
-                .deps
-                .require_local::<crate::encoders::ViperTupleEnc>(num_upvars)
-                .unwrap();
-            
-            // Bind each upvar from cl_def_id's MIR to the corresponding tuple element
-            for k in 0..num_upvars {
-                let mir_local_for_upvar_k = mir::Local::from_usize(k + 1); // cl_def_id's MIR Local(1) = upvar0, Local(2) = upvar1, etc.
-                let upvar_ty = upvar_tys[k];
-                
-                // Create expression: extract k-th element from upvar tuple and cast to concrete type
-                // We create the expression immediately to avoid borrowing issues
-                let upvar_elem_expr = {
-                    let elem_tuple_expr = self.vcx.mk_lazy_expr(
-                        vir::vir_format!(self.vcx, "upvar_tuple_arg"),
-                        tuple_enc.snapshot().unwrap_or_else(|| {
-                            self.deps
-                                .require_ref::<GenericEnc>(())
-                                .unwrap()
-                                .param_snapshot
-                        }),
-                        Box::new(move |_vcx, lctx: ExprInput<'vir>| {
-                            println!("MIR_PURE.RS: encode_body - Binding cl_def_id MIR Local({}) to reify_args[0] (upvar_tuple). Type from lctx: {:?}", k + 1, lctx.1[0].ty());
-                            lctx.1[0].kind
-                        }),
-                    );
-                    tuple_enc.mk_elem(self.vcx, elem_tuple_expr, k)
-                };
-                
-                // Cast to concrete type if necessary
-                let cast = self
-                    .deps
-                    .require_local::<RustTyCastersEnc<CastTypePure>>(upvar_ty)
-                    .unwrap();
-                let upvar_concrete_expr = cast.cast_to_concrete_if_possible(self.vcx, upvar_elem_expr);
-                
-                // Bind this upvar MIR local to the concrete expression
-                init.binds.push(UpdateBind::Local(mir_local_for_upvar_k, 0, upvar_concrete_expr));
-                init.versions.insert(mir_local_for_upvar_k, 0);
-            }
+            // Bind Local(1) to the upvar tuple from reify_args[0]
+            // This will be handled specially in encode_place_element for field projections
+            let upvar_tuple_ex = self.vcx.mk_lazy_expr(
+                vir::vir_format!(self.vcx, "upvar_tuple_for_cl_def_id"),
+                correct_viper_type_for_upvar_tuple,
+                Box::new(move |_vcx, lctx: ExprInput<'vir>| {
+                    println!("MIR_PURE.RS: encode_body - Binding cl_def_id MIR Local(1) to reify_args[0] (upvar_tuple). Type from lctx: {:?}", lctx.1[0].ty());
+                    lctx.1[0].kind
+                }),
+            );
+            init.binds.push(UpdateBind::Local(mir::Local::from_usize(1), 0, upvar_tuple_ex));
+            init.versions.insert(mir::Local::from_usize(1), 0);
             
             // Handle qvars (subsequent arguments after the upvar tuple)
-            // qvars start from cl_def_id's MIR Local(num_upvars + 1)
-            let num_qvars = self.body.arg_count.saturating_sub(num_upvars);
-            for qvar_idx in 0..num_qvars {
-                let mir_local_for_qvar = mir::Local::from_usize(num_upvars + 1 + qvar_idx);
-                let qvar_arg_idx = 1 + qvar_idx; // lctx.1[1], lctx.1[2], etc.
+            // qvars start from cl_def_id's MIR Local(2) onwards (if any)
+            for qvar_idx in 1..self.body.arg_count {
+                let mir_local_for_qvar = mir::Local::from_usize(qvar_idx + 1);
+                let qvar_arg_idx = qvar_idx; // lctx.1[1], lctx.1[2], etc.
                 
                 let qvar_ex = self.vcx.mk_lazy_expr(
-                    vir::vir_format!(self.vcx, "pure in _qvar_{qvar_idx}"), 
+                    vir::vir_format!(self.vcx, "pure in _qvar_{}", qvar_idx - 1), 
                     self.get_ty_for_local(mir_local_for_qvar),
                     Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[qvar_arg_idx].kind),
                 );
@@ -495,7 +475,27 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             }
         }
 
+        if self.kind == PureKind::SpecOnlyLoopInvariantBody {
+            println!("MIR_PURE.RS: encode_body - Before encode_cfg, init.versions: {:?}", init.versions);
+            println!("MIR_PURE.RS: encode_body - init.binds count: {}", init.binds.len());
+            for (idx, bind) in init.binds.iter().enumerate() {
+                if let UpdateBind::Local(local, version, _) = bind {
+                    println!("MIR_PURE.RS:   init.binds[{}]: Local({}) version {}", idx, local.as_usize(), version);
+                }
+            }
+        }
+
         let update = self.encode_cfg(&init.versions, mir::START_BLOCK, self.rev_doms.end);
+
+        if self.kind == PureKind::SpecOnlyLoopInvariantBody {
+            println!("MIR_PURE.RS: encode_body - After encode_cfg, update.versions: {:?}", update.versions);
+            println!("MIR_PURE.RS: encode_body - update.binds count: {}", update.binds.len());
+            for (idx, bind) in update.binds.iter().enumerate() {
+                if let UpdateBind::Local(local, version, _) = bind {
+                    println!("MIR_PURE.RS:   update.binds[{}]: Local({}) version {}", idx, local.as_usize(), version);
+                }
+            }
+        }
 
         let res = init.merge(update);
         let ret_version = res.versions.get(&mir::RETURN_PLACE).copied().unwrap_or(0);
@@ -951,6 +951,36 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
                 self.get_ty_for_local(place.local),
                 Box::new(move |_vcx, lctx: ExprInput<'vir>| lctx.1[local_as_uzize - 1].kind),
             )
+        } else if self.kind == PureKind::SpecOnlyLoopInvariantBody && place.local.as_usize() == 1 {
+            // Special case: For SpecOnlyLoopInvariantBody, when accessing Local(1) (with or without projections),
+            // we provide the upvar_tuple from reify_args[0]. This will be used for field projections.
+            
+            // Calculate the correct Viper type for the upvar tuple (same logic as in encode_body)
+            let closure_ty = self.vcx.tcx().type_of(self.def_id).instantiate_identity();
+            let correct_viper_type_for_upvar_tuple = if let TyKind::Closure(_, cl_args) = closure_ty.kind() {
+                let upvar_tys = cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>();
+                let num_upvars = upvar_tys.len();
+                
+                if num_upvars > 0 {
+                    let tuple_encoder = self.deps.require_local::<crate::encoders::ViperTupleEnc>(num_upvars).unwrap();
+                    tuple_encoder.snapshot().unwrap_or_else(|| {
+                        self.deps.require_ref::<GenericEnc>(()).unwrap().param_snapshot
+                    })
+                } else {
+                    self.deps.require_ref::<GenericEnc>(()).unwrap().param_snapshot
+                }
+            } else {
+                self.deps.require_ref::<GenericEnc>(()).unwrap().param_snapshot
+            };
+            
+            self.vcx.mk_lazy_expr(
+                vir::vir_format!(self.vcx, "upvar_tuple_access_for_local_1"),
+                correct_viper_type_for_upvar_tuple,
+                Box::new(move |_vcx, lctx: ExprInput<'vir>| {
+                    println!("MIR_PURE.RS: encode_place_with_ref - Special Local(1) access, providing upvar_tuple. Type from lctx: {:?}", lctx.1[0].ty());
+                    lctx.1[0].kind
+                }),
+            )
         } else {
             self.mk_local_ex(place.local, curr_ver[&place.local])
         };
@@ -967,7 +997,7 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
             place_ty = place_ty.projection_ty(self.vcx.tcx(), elem);
         }
         // Can we ever have the use of a projected place?
-        assert!(place_ty.variant_index.is_none());
+        assert!(place_ty.variant_index.is_none()); 
 
         if should_wrap {
             if self.old_mode {
@@ -994,6 +1024,76 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
         expr: ExprRet<'vir>,
         place_ref: Option<ExprRet<'vir>>,
     ) -> (ExprRet<'vir>, Option<ExprRet<'vir>>) {
+        // Special handling for SpecOnlyLoopInvariantBody
+        if self.kind == PureKind::SpecOnlyLoopInvariantBody {
+            match elem {
+                mir::ProjectionElem::Deref => {
+                    // Check if we're dereferencing the upvar tuple directly
+                    // This happens when MIR expects to dereference `_1: &Closure` but we provide the tuple contents directly
+                    let closure_ty = self.vcx.tcx().type_of(self.def_id).instantiate_identity();
+                    if let TyKind::Closure(_, cl_args) = closure_ty.kind() {
+                        let upvar_tys = cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>();
+                        let num_upvars = upvar_tys.len();
+                        
+                        // Check if expr is our upvar tuple type
+                        if num_upvars > 0 {
+                            let tuple_enc = self.deps.require_local::<crate::encoders::ViperTupleEnc>(num_upvars).unwrap();
+                            let expected_tuple_type = if let Some(snapshot_type) = tuple_enc.snapshot() {
+                                snapshot_type
+                            } else {
+                                // Fallback for single element tuples - use the generic param type
+                                self.deps.require_ref::<GenericEnc>(()).unwrap().param_snapshot
+                            };
+                            
+                            // If the expr type matches our upvar tuple type, this is a "fake" deref
+                            // The MIR thinks it's dereferencing &Closure, but we're providing tuple contents directly
+                            if expr.ty() == expected_tuple_type {
+                                println!("MIR_PURE.RS: encode_place_element - Skipping fake deref of upvar tuple, keeping type: {:?}", expr.ty());
+                                return (expr, place_ref);  // Pass through unchanged
+                            }
+                        }
+                    }
+                }
+                mir::ProjectionElem::Field(field_idx, _) => {
+                    // This should be accessing a field of the upvar tuple (cl_def_id's MIR Local(1))
+                    // expr is the Viper expression for the upvar_tuple (s_N_Tuple)
+                    
+                    // Get closure information to determine upvar types
+                    let closure_ty = self.vcx.tcx().type_of(self.def_id).instantiate_identity();
+                    if let TyKind::Closure(_, cl_args) = closure_ty.kind() {
+                        let upvar_tys = cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>();
+                        let num_upvars = upvar_tys.len();
+                        
+                        if field_idx.as_usize() < num_upvars {
+                            // This is an upvar field access - use tuple read instead of closure field read
+                            let tuple_enc = self
+                                .deps
+                                .require_local::<crate::encoders::ViperTupleEnc>(num_upvars)
+                                .unwrap();
+                            
+                            // Read the field_idx-th element from the tuple
+                            let tuple_elem = tuple_enc.mk_elem(self.vcx, expr, field_idx.as_usize());
+                            
+                            // Get the original upvar reference type (e.g., &usize)
+                            let original_upvar_ref_ty = upvar_tys[field_idx.as_usize()];
+                            
+                            // Cast to concrete s_Ref_immutable type
+                            let cast = self
+                                .deps
+                                .require_local::<RustTyCastersEnc<CastTypePure>>(original_upvar_ref_ty)
+                                .unwrap();
+                            let concrete_ref = cast.cast_to_concrete_if_possible(self.vcx, tuple_elem);
+                            
+                            println!("MIR_PURE.RS: encode_place_element - Field access in SpecOnly: field_idx={}, result type: {:?}", field_idx.as_usize(), concrete_ref.ty());
+                            
+                            return (concrete_ref, place_ref);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        
         encode_place_element(self.vcx, self.deps, place_ty, elem, expr, place_ref)
     }
 
