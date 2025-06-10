@@ -1026,71 +1026,63 @@ impl<'vir: 'enc, 'enc> Enc<'vir, 'enc> {
     ) -> (ExprRet<'vir>, Option<ExprRet<'vir>>) {
         // Special handling for SpecOnlyLoopInvariantBody
         if self.kind == PureKind::SpecOnlyLoopInvariantBody {
-            match elem {
-                mir::ProjectionElem::Deref => {
-                    // Check if we're dereferencing the upvar tuple directly
-                    // This happens when MIR expects to dereference `_1: &Closure` but we provide the tuple contents directly
-                    let closure_ty = self.vcx.tcx().type_of(self.def_id).instantiate_identity();
-                    if let TyKind::Closure(_, cl_args) = closure_ty.kind() {
-                        let upvar_tys = cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>();
-                        let num_upvars = upvar_tys.len();
-                        
-                        // Check if expr is our upvar tuple type
-                        if num_upvars > 0 {
-                            let tuple_enc = self.deps.require_local::<crate::encoders::ViperTupleEnc>(num_upvars).unwrap();
-                            let expected_tuple_type = if let Some(snapshot_type) = tuple_enc.snapshot() {
-                                snapshot_type
-                            } else {
-                                // Fallback for single element tuples - use the generic param type
-                                self.deps.require_ref::<GenericEnc>(()).unwrap().param_snapshot
-                            };
-                            
-                            // If the expr type matches our upvar tuple type, this is a "fake" deref
-                            // The MIR thinks it's dereferencing &Closure, but we're providing tuple contents directly
-                            if expr.ty() == expected_tuple_type {
-                                println!("MIR_PURE.RS: encode_place_element - Skipping fake deref of upvar tuple, keeping type: {:?}", expr.ty());
-                                return (expr, place_ref);  // Pass through unchanged
-                            }
-                        }
-                    }
-                }
-                mir::ProjectionElem::Field(field_idx, _) => {
-                    // This should be accessing a field of the upvar tuple (cl_def_id's MIR Local(1))
-                    // expr is the Viper expression for the upvar_tuple (s_N_Tuple)
+            // Handle "fake" Deref on upvar tuple first
+            if let mir::ProjectionElem::Deref = elem {
+                // Check if we're dereferencing the upvar tuple directly
+                // This happens when MIR expects to dereference `_1: &Closure` but we provide the tuple contents directly
+                
+                // Check if place_ty.ty is a Closure type (indicating this is likely the fake deref on Local(1))
+                if matches!(place_ty.ty.kind(), TyKind::Closure(_, _)) || 
+                   (place_ty.ty.is_ref() && matches!(place_ty.ty.peel_refs().kind(), TyKind::Closure(_, _))) {
                     
-                    // Get closure information to determine upvar types
-                    let closure_ty = self.vcx.tcx().type_of(self.def_id).instantiate_identity();
-                    if let TyKind::Closure(_, cl_args) = closure_ty.kind() {
-                        let upvar_tys = cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>();
-                        let num_upvars = upvar_tys.len();
-                        
-                        if field_idx.as_usize() < num_upvars {
-                            // This is an upvar field access - use tuple read instead of closure field read
-                            let tuple_enc = self
-                                .deps
-                                .require_local::<crate::encoders::ViperTupleEnc>(num_upvars)
-                                .unwrap();
-                            
-                            // Read the field_idx-th element from the tuple
-                            let tuple_elem = tuple_enc.mk_elem(self.vcx, expr, field_idx.as_usize());
-                            
-                            // Get the original upvar reference type (e.g., &usize)
-                            let original_upvar_ref_ty = upvar_tys[field_idx.as_usize()];
-                            
-                            // Cast to concrete s_Ref_immutable type
-                            let cast = self
-                                .deps
-                                .require_local::<RustTyCastersEnc<CastTypePure>>(original_upvar_ref_ty)
-                                .unwrap();
-                            let concrete_ref = cast.cast_to_concrete_if_possible(self.vcx, tuple_elem);
-                            
-                            println!("MIR_PURE.RS: encode_place_element - Field access in SpecOnly: field_idx={}, result type: {:?}", field_idx.as_usize(), concrete_ref.ty());
-                            
-                            return (concrete_ref, place_ref);
-                        }
+                    // Check if expr is our upvar tuple type by examining its Viper type
+                    let is_tuple_type = match expr.ty() {
+                        vir::TypeData::Domain(name, _) => name.contains("Tuple"),
+                        _ => false,
+                    };
+                    if is_tuple_type {
+                        println!("MIR_PURE.RS: encode_place_element - Skipping fake deref of upvar tuple. Expr type: {:?}, place_ty: {:?}", expr.ty(), place_ty.ty);
+                        return (expr, place_ref);  // Pass through unchanged
                     }
                 }
-                _ => {}
+            }
+            
+            // Handle Field access on upvar tuple
+            if let mir::ProjectionElem::Field(field_idx, _) = elem {
+                // This should be accessing a field of the upvar tuple (cl_def_id's MIR Local(1))
+                // expr is the Viper expression for the upvar_tuple (s_N_Tuple)
+                
+                // Get closure information to determine upvar types
+                let closure_ty = self.vcx.tcx().type_of(self.def_id).instantiate_identity();
+                if let TyKind::Closure(_, cl_args) = closure_ty.kind() {
+                    let upvar_tys = cl_args.as_closure().upvar_tys().into_iter().collect::<Vec<_>>();
+                    let num_upvars = upvar_tys.len();
+                    
+                    if field_idx.as_usize() < num_upvars {
+                        // This is an upvar field access - use tuple read instead of closure field read
+                        let tuple_enc = self
+                            .deps
+                            .require_local::<crate::encoders::ViperTupleEnc>(num_upvars)
+                            .unwrap();
+                        
+                        // Read the field_idx-th element from the tuple
+                        let tuple_elem = tuple_enc.mk_elem(self.vcx, expr, field_idx.as_usize());
+                        
+                        // Get the original upvar reference type (e.g., &usize)
+                        let original_upvar_ref_ty = upvar_tys[field_idx.as_usize()];
+                        
+                        // Cast to concrete s_Ref_immutable type
+                        let cast = self
+                            .deps
+                            .require_local::<RustTyCastersEnc<CastTypePure>>(original_upvar_ref_ty)
+                            .unwrap();
+                        let concrete_ref = cast.cast_to_concrete_if_possible(self.vcx, tuple_elem);
+                        
+                        println!("MIR_PURE.RS: encode_place_element - Field access in SpecOnly: field_idx={}, result type: {:?}", field_idx.as_usize(), concrete_ref.ty());
+                        
+                        return (concrete_ref, place_ref);
+                    }
+                }
             }
         }
         

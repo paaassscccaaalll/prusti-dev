@@ -267,12 +267,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
         
         for (place, cl_def_id, cl_args, upvar_operands) in closure_assignments {
-            // Add access permissions for the closure object itself
-            let (place_res, _snap, _, _) = self.encode_place_snap(place.into());
+            // Add access permissions for the closure object itself (not necessary since we dont use the closure anymore)
+            /* let (place_res, _snap, _, _) = self.encode_place_snap(place.into());
             let closure_ty = place.ty(self.body, self.vcx.tcx()).ty;
             let ty_out = self.deps.require_ref::<RustTyPredicatesEnc>(closure_ty).unwrap();
             let pred = ty_out.ref_to_pred(self.vcx, place_res.expr, Some(self.vcx.mk_wildcard()));
-            inv.push(pred);
+            inv.push(pred); */
 
             // Add access permissions for each upvar place (e.g., _10p, _11p for &_1, &_2)
             for upvar_operand in &upvar_operands {
