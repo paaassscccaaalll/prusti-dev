@@ -45,9 +45,9 @@ pub(crate) fn domain<'vir>(
             ([output_ref.typeof_function]([cons_ident](r, p))) == ([ty_type_func.ty_constructor]([generic_enc.param_type_function](p)))
     });
     builder.axiom("value_typeof", vir::expr! {
-        forall s: [builder.self_type()] ::
-            {[generic_enc.param_type_function]([value_ident](s))}
-            ([generic_enc.param_type_function]([value_ident](s))) == ([output_ref.ty_param_accessors[0]]([output_ref.typeof_function](s)))
+        forall r: [builder.self_type()] ::
+            {[generic_enc.param_type_function]([value_ident](r))}
+            ([generic_enc.param_type_function]([value_ident](r))) == ([output_ref.ty_param_accessors[0]]([output_ref.typeof_function](r)))
     });
     // builder.axiom("cons", vir::expr! {
     //     forall s: [builder.self_type()] :: {[deref_ident](s)} ([cons_ident]([deref_ident](s))) == (s)
