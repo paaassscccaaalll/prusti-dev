@@ -282,8 +282,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     }
 
     fn encode_loop_invariant_closure(&mut self, cl_def_id: DefId, _cl_args: ty::GenericArgsRef<'vir>, upvar_operands: &[mir::Operand<'vir>]) -> ExprRet<'vir> {
-        println!("LOOP.RS: encode_loop_invariant_closure for cl_def_id: {:?}", cl_def_id);
-
         let tcx = self.vcx.tcx();
         let closure_ty = tcx.type_of(cl_def_id).instantiate_identity();
 
