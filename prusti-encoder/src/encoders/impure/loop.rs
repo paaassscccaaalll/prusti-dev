@@ -41,7 +41,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
     /// Calculate invariant at loop head
     pub(crate) fn get_loop_inv(
         &mut self,
-        _lh: LoopId,
+        lh: LoopId,
         cfpcs: &PcgBasicBlock<'vir>,
     ) -> &'vir [vir::Expr<'vir>] {
         let mut inv = Vec::new();
@@ -106,7 +106,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             inv.push(wand);
         }
 
-        self.collect_loop_invariants(&mut inv);
+        self.collect_loop_invariants(lh, &mut inv);
         self.vcx.alloc_slice(&inv)
     }
 
@@ -242,10 +242,14 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
     }
 
-    fn collect_loop_invariants(&mut self, inv: &mut Vec<vir::Expr<'vir>>) {
+    fn collect_loop_invariants(&mut self, loop_id: LoopId, inv: &mut Vec<vir::Expr<'vir>>) {
         let mut closure_assignments = Vec::new();
         
-        for (_block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
+        for (block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
+            if !self.loop_analysis.in_loop(block_idx, loop_id) {
+                continue;
+            }
+            
             for stmt in &block_data.statements {
                 if let mir::StatementKind::Assign(box (place, rvalue)) = &stmt.kind {
                     if let mir::Rvalue::Aggregate(box mir::AggregateKind::Closure(cl_def_id, cl_args), ref upvar_operands) = rvalue {
