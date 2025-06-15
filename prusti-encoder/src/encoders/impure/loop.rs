@@ -262,7 +262,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         });
 
                         if is_loop_invariant {
-                            closure_assignments.push((*place, *cl_def_id, *cl_args, upvar_operands.clone()));
+                            //work through loop by loop
+                            let innermost_loop_id = self.loop_analysis.innermost_loop(block_idx);
+                            //only consider this invariant if it belongs directly to the loop
+                            if innermost_loop_id == Some(loop_id) {
+                                closure_assignments.push((*place, *cl_def_id, *cl_args, upvar_operands.clone()));
+                            }
                         }
                     }
                 }
@@ -313,7 +318,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 })
                 .collect::<Vec<_>>(),
         );
-
+        // Can there be collisions here if identifiers are not unique?
         let mut ref_to_original_place_map: std::collections::HashMap<mir::Place<'vir>, mir::Place<'vir>> = std::collections::HashMap::new();
         for (_block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
             for stmt in &block_data.statements {
