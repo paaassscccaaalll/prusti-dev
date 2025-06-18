@@ -275,13 +275,6 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
         
         for (_place, cl_def_id, cl_args, upvar_operands) in closure_assignments {
-            for upvar_operand in &upvar_operands {
-                if let mir::Operand::Move(upvar_place) | mir::Operand::Copy(upvar_place) = upvar_operand {
-                    let (_upvar_place_res, _snap, _, _) = self.encode_place_snap((*upvar_place).into());
-                    let _upvar_ty = upvar_place.ty(self.body, self.vcx.tcx()).ty;
-                }
-            }
-
             let invariant_expr = self.encode_loop_invariant_closure(cl_def_id, cl_args, &upvar_operands.into_iter().collect::<Vec<_>>());
             let concrete_expr = unsafe {
                 std::mem::transmute::<ExprRet<'_>, vir::ExprGen<'_, !, !>>(invariant_expr)
