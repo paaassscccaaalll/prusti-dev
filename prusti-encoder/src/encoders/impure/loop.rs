@@ -145,7 +145,11 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             inv.push(wand);
         }
 
-        self.collect_loop_invariants(lh, &mut inv);
+        let loop_invariants_map = self.build_loop_invariants_map();
+        if let Some(loop_invariants) = loop_invariants_map.get(&lh) {
+            inv.extend(loop_invariants.iter().cloned());
+        }
+        
         self.vcx.alloc_slice(&inv)
     }
 
@@ -281,16 +285,12 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         }
     }
 
-    fn collect_loop_invariants(&mut self, loop_id: LoopId, inv: &mut Vec<vir::Expr<'vir>>) {
-        let mut closure_assignments = Vec::new();
+    fn build_loop_invariants_map(&mut self) -> std::collections::HashMap<LoopId, Vec<vir::Expr<'vir>>> {
+        let mut loop_invariants_map = std::collections::HashMap::new();
         
         for (block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
-            if !self.loop_analysis.in_loop(block_idx, loop_id) {
-                continue;
-            }
-            
             for stmt in &block_data.statements {
-                if let mir::StatementKind::Assign(box (place, rvalue)) = &stmt.kind {
+                if let mir::StatementKind::Assign(box (_, rvalue)) = &stmt.kind {
                     if let mir::Rvalue::Aggregate(box mir::AggregateKind::Closure(cl_def_id, cl_args), ref upvar_operands) = rvalue {
                         let is_loop_invariant = spec::with_def_spec(|def_spec| {
                             if let Some(loop_spec) = def_spec.get_loop_spec(cl_def_id) {
@@ -301,23 +301,24 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         });
 
                         if is_loop_invariant {
-                            let innermost_loop_id = self.loop_analysis.innermost_loop(block_idx);
-                            if innermost_loop_id == Some(loop_id) {
-                                closure_assignments.push((*place, *cl_def_id, *cl_args, upvar_operands.clone()));
+                            if let Some(innermost_loop_id) = self.loop_analysis.innermost_loop(block_idx) {
+                                let invariant_expr = self.encode_loop_invariant_closure(*cl_def_id, *cl_args, &upvar_operands.raw);
+                                let concrete_expr = unsafe {
+                                    std::mem::transmute::<ExprRet<'_>, vir::ExprGen<'_, !, !>>(invariant_expr)
+                                };
+                                
+                                loop_invariants_map
+                                    .entry(innermost_loop_id)
+                                    .or_insert_with(Vec::new)
+                                    .push(concrete_expr);
                             }
                         }
-                    }
+                    } 
                 }
             }
         }
         
-        for (_place, cl_def_id, cl_args, upvar_operands) in closure_assignments {
-            let invariant_expr = self.encode_loop_invariant_closure(cl_def_id, cl_args, &upvar_operands.into_iter().collect::<Vec<_>>());
-            let concrete_expr = unsafe {
-                std::mem::transmute::<ExprRet<'_>, vir::ExprGen<'_, !, !>>(invariant_expr)
-            };
-            inv.push(concrete_expr);
-        }
+        loop_invariants_map
     }
 
     fn encode_loop_invariant_closure(&mut self, cl_def_id: DefId, _cl_args: ty::GenericArgsRef<'vir>, upvar_operands: &[mir::Operand<'vir>]) -> ExprRet<'vir> {
