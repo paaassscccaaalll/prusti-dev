@@ -80,6 +80,7 @@ pub struct SpecCollector<'a, 'tcx> {
     /// Map from functions/loops/types to their specifications.
     procedure_specs: FxHashMap<LocalDefId, ProcedureSpecRefs>,
     loop_specs: Vec<LocalDefId>,
+    loop_invariants: Vec<LocalDefId>,
     loop_variants: Vec<LocalDefId>,
     type_specs: FxHashMap<LocalDefId, TypeSpecRefs>,
     prusti_assertions: Vec<LocalDefId>,
@@ -97,6 +98,7 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
             spec_functions: FxHashMap::default(),
             procedure_specs: FxHashMap::default(),
             loop_specs: vec![],
+            loop_invariants: vec![],
             loop_variants: vec![],
             type_specs: FxHashMap::default(),
             prusti_assertions: vec![],
@@ -220,6 +222,12 @@ impl<'a, 'tcx> SpecCollector<'a, 'tcx> {
             def_spec.loop_specs.insert(
                 local_id.to_def_id(),
                 typed::LoopSpecification::Invariant(*local_id),
+            );
+        }
+        for local_id in self.loop_invariants.iter() {
+            def_spec.loop_specs.insert(
+                local_id.to_def_id(),
+                typed::LoopSpecification::LoopInvariant(*local_id),
             );
         }
         for local_id in self.loop_variants.iter() {
@@ -485,6 +493,9 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for SpecCollector<'a, 'tcx> {
             // Collect loop specifications
             if has_prusti_attr(attrs, "loop_body_invariant_spec") {
                 self.loop_specs.push(local_id);
+            }
+            if has_prusti_attr(attrs, "loop_invariant_spec") {
+                self.loop_invariants.push(local_id);
             }
             if has_prusti_attr(attrs, "loop_body_variant_spec") {
                 self.loop_variants.push(local_id);

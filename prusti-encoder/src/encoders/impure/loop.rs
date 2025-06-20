@@ -255,7 +255,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                     if let mir::Rvalue::Aggregate(box mir::AggregateKind::Closure(cl_def_id, cl_args), ref upvar_operands) = rvalue {
                         let is_loop_invariant = spec::with_def_spec(|def_spec| {
                             if let Some(loop_spec) = def_spec.get_loop_spec(cl_def_id) {
-                                matches!(loop_spec, prusti_interface::specs::typed::LoopSpecification::Invariant(_))
+                                matches!(loop_spec, prusti_interface::specs::typed::LoopSpecification::LoopInvariant(_))
                             } else {
                                 false
                             }
