@@ -348,13 +348,15 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                 })
                 .collect::<Vec<_>>(),
         );
-        // Can there be collisions here if identifiers are not unique?
         let mut ref_to_original_place_map: std::collections::HashMap<mir::Place<'vir>, mir::Place<'vir>> = std::collections::HashMap::new();
         for (_block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
             for stmt in &block_data.statements {
                 if let mir::StatementKind::Assign(box (place, rvalue)) = &stmt.kind {
                     if let mir::Rvalue::Ref(_, _, original_place) = rvalue {
-                        ref_to_original_place_map.insert(*place, *original_place);
+                        if let Some(existing_place) = ref_to_original_place_map.insert(*place, *original_place) {
+                            panic!("Collision in ref_to_original_place_map: place {:?} already mapped to {:?}, trying to map to {:?}", 
+                                   place, existing_place, original_place);
+                        }
                     }
                 }
             }
