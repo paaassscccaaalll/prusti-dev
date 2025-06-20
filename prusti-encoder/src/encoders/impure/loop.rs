@@ -38,6 +38,41 @@ pub(super) enum WandOldOuter<'vir> {
 }
 
 impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
+    fn collect_used_locals_in_loop(&self, loop_id: LoopId) -> std::collections::HashSet<mir::Local> {
+        let mut used_locals = std::collections::HashSet::new();
+
+        for (block_idx, block_data) in self.body.basic_blocks.iter_enumerated() {
+            if !self.loop_analysis.in_loop(block_idx, loop_id) {
+                continue;
+            }
+
+            for stmt in &block_data.statements {
+                if let mir::StatementKind::Assign(box (place, rvalue)) = &stmt.kind {
+                    used_locals.insert(place.local);
+                    match rvalue {
+                        mir::Rvalue::Use(mir::Operand::Copy(p) | mir::Operand::Move(p)) => {
+                            used_locals.insert(p.local);
+                        }
+                        mir::Rvalue::Ref(_, _, p) => {
+                            used_locals.insert(p.local);
+                        }
+                        mir::Rvalue::BinaryOp(_, box (left, right)) => {
+                            if let mir::Operand::Copy(p) | mir::Operand::Move(p) = left {
+                                used_locals.insert(p.local);
+                            }
+                            if let mir::Operand::Copy(p) | mir::Operand::Move(p) = right {
+                                used_locals.insert(p.local);
+                            }
+                        }
+                        _ => {} // There are many more ways where locals could be used, but this is only temporary
+                    }
+                }
+            }
+        }
+
+        used_locals
+    }
+
     /// Calculate invariant at loop head
     pub(crate) fn get_loop_inv(
         &mut self,
@@ -47,6 +82,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
         let mut inv = Vec::new();
         let start = &cfpcs.statements[0];
         let state = &*start.states[EvalStmtPhase::PreOperands];
+        let used_locals = self.collect_used_locals_in_loop(lh);
         // let borrows = &*start.borrows[EvalStmtPhase::PreOperands];
         // self.stmt(self.vcx.mk_comment_stmt(
         //     vir::vir_format!(self.vcx, "_borrows: {:#?}", borrows),
@@ -58,6 +94,9 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
             let cap = cap_local.get_allocated();
             for place in cap.leaves(self.pcg_ctxt()).iter() {
                 if !state.capabilities().is_exclusive(*place) {
+                    continue;
+                }
+                if !used_locals.contains(&place.local) {
                     continue;
                 }
                 let (place_res, snap, _, _) = self.encode_place_snap(*place);
@@ -262,9 +301,7 @@ impl<'vir, 'enc, E: TaskEncoder> ImpureEncVisitor<'vir, 'enc, E> {
                         });
 
                         if is_loop_invariant {
-                            //work through loop by loop
                             let innermost_loop_id = self.loop_analysis.innermost_loop(block_idx);
-                            //only consider this invariant if it belongs directly to the loop
                             if innermost_loop_id == Some(loop_id) {
                                 closure_assignments.push((*place, *cl_def_id, *cl_args, upvar_operands.clone()));
                             }
