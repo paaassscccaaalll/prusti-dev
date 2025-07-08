@@ -325,6 +325,7 @@ impl TaskEncoder for CastersEnc<CastTypePure> {
                     ),
                 ]),
                 None,
+                None,
             );
 
             let make_concrete_snap_arg_decl = vcx.mk_local_decl("snap", generic_ref.param_snapshot);
@@ -363,6 +364,7 @@ impl TaskEncoder for CastersEnc<CastTypePure> {
                 self_ty,
                 vcx.alloc_slice(&[make_concrete_pre]),
                 vcx.alloc_slice(&[make_concrete_post]),
+                None,
                 None,
             );
 
