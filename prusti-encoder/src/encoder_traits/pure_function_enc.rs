@@ -198,6 +198,7 @@ where
                     return_type.snapshot,
                     vcx.alloc_slice(&pres),
                     vcx.alloc_slice(&posts),
+                    expr.is_none().then_some(&vir::DecreasesGenData::Star),
                     expr,
                 ),
             })

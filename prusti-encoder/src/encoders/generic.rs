@@ -115,13 +115,18 @@ impl TaskEncoder for GenericEnc {
                     t,
                 )]),
                 None,
+                None,
             );
 
             // unreachable_to_snap
             let name = unreachable_to_snap.name_str();
             let false_ = vcx.alloc_slice(&[vcx.mk_bool::<false>()]);
             let unreachable_to_snap =
+<<<<<<< HEAD
                 vcx.mk_function(name, &[], &SNAPSHOT_PARAM_DOMAIN, false_, false_, None);
+=======
+                vcx.mk_function(unreachable_to_snap, (), false_, false_, None, None);
+>>>>>>> b6e2cf58ac6 (Add decreases and fix builtin eq issue (#80))
             Ok((
                 GenericEncOutput {
                     param_snapshot: vir::vir_domain! { vcx; domain s_Param {

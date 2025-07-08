@@ -125,6 +125,7 @@ impl MirBuiltinEnc {
             e_ty.snapshot,
             &[],
             &[],
+            None,
             Some(val),
         ))
     }
@@ -173,7 +174,7 @@ impl MirBuiltinEnc {
             rhs = vcx.mk_bin_op_expr(vir::BinOpKind::Mod, rhs, vcx.get_bit_width_int(l_ty.kind()));
         }
         let op_kind = vir::BinOpKind::from(op);
-        let viper_val = vcx.mk_bin_op_expr(op_kind, lhs, rhs);
+        let viper_val = vcx.mk_bin_op_expr_inner(op_kind, lhs, rhs);
         let (pres, val) = match op {
             // Overflow well defined as wrapping (implicit) and for the shifts
             // the RHS will be masked to the bit width.
@@ -224,9 +225,18 @@ impl MirBuiltinEnc {
                     // match up when `arg1 < 0`, encode this difference.
                     if matches!(op, Div) {
                         // `arg1 >= 0 ? arg1 \ arg2 : arg2 >= 0 ? (arg1 - 1) \ arg2 + 1 : (arg1 - 1) \ arg2 - 1`
+<<<<<<< HEAD
                         let lhs_sub =
                             vcx.mk_bin_op_expr(vir::BinOpKind::Sub, lhs, vcx.mk_int::<1>());
                         let common_div = vcx.mk_bin_op_expr(op_kind, lhs_sub, rhs);
+=======
+                        let lhs_sub = vcx.mk_bin_op_expr(
+                            vir::BinOpKind::Sub,
+                            lhs.downcast_ty(),
+                            vcx.mk_int::<1>(),
+                        );
+                        let common_div = vcx.mk_bin_op_expr_inner(op_kind, lhs_sub, rhs).downcast_ty();
+>>>>>>> b6e2cf58ac6 (Add decreases and fix builtin eq issue (#80))
                         let neg_pos =
                             vcx.mk_bin_op_expr(vir::BinOpKind::Add, common_div, vcx.mk_int::<1>());
                         let neg_neg =
@@ -271,6 +281,7 @@ impl MirBuiltinEnc {
             e_res_ty.snapshot,
             vcx.alloc_slice(&pres),
             &[],
+            None,
             Some(val),
         ))
     }
@@ -387,6 +398,7 @@ impl MirBuiltinEnc {
             e_res_ty.snapshot,
             &[],
             &[],
+            None,
             Some(vcx.mk_let_expr(val_str, val_exp, inner_let)),
         ))
     }
