@@ -400,10 +400,11 @@ impl<'tcx> VirCtxt<'tcx> {
     }
     pub fn mk_eq_expr<'vir, Curr, Next>(
         &'vir self,
-        lhs: ExprGen<'vir, Curr, Next>,
-        rhs: ExprGen<'vir, Curr, Next>,
-    ) -> ExprGen<'vir, Curr, Next> {
-        self.mk_bin_op_expr(BinOpKind::CmpEq, lhs, rhs)
+        lhs: ExprGen<'vir, Curr, Next, T>,
+        rhs: ExprGen<'vir, Curr, Next, T>,
+    ) -> ExprGenBool<'vir, Curr, Next> {
+        self.mk_bin_op_expr_inner(BinOpKind::CmpEq, lhs, rhs)
+            .downcast_ty()
     }
 
     /// To be used only when `kind` is generated e.g. with a `from` call.
