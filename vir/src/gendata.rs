@@ -287,19 +287,10 @@ pub struct FunctionGenData<'vir, Curr, Next> {
     #[vir(reify_pass)]
     pub args: &'vir [LocalDecl<'vir>],
     #[vir(reify_pass, is_ref)]
-    pub ret: TypeDyn<'vir>,
-    pub pres: &'vir [ExprGenBool<'vir, Curr, Next>],
-    pub posts: &'vir [ExprGenBool<'vir, Curr, Next>],
-    pub decreases: DecreasesGen<'vir, Curr, Next>,
-    pub expr: Option<ExprGenDyn<'vir, Curr, Next>>,
-}
-
-#[derive(VirHash, VirReify, VirSerde)]
-pub enum DecreasesGenData<'vir, Curr, Next> {
-    None,
-    Tuple(&'vir [ExprGenDyn<'vir, Curr, Next>], Option<ExprGenBool<'vir, Curr, Next>>),
-    Wildcard(Option<ExprGenBool<'vir, Curr, Next>>),
-    Star,
+    pub ret: Type<'vir>,
+    pub pres: &'vir [ExprGen<'vir, Curr, Next>],
+    pub posts: &'vir [ExprGen<'vir, Curr, Next>],
+    pub expr: Option<ExprGen<'vir, Curr, Next>>,
 }
 
 // TODO: why is this called "pure"?

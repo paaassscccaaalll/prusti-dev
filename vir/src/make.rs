@@ -406,9 +406,7 @@ impl<'tcx> VirCtxt<'tcx> {
         self.mk_bin_op_expr(BinOpKind::CmpEq, lhs, rhs)
     }
 
-    /// To be used only when `kind` is generated e.g. with a `from` call.
-    /// Otherwise always use either `mk_eq_expr` or `mk_bin_op_expr`.
-    pub fn mk_bin_op_expr_inner<'vir, Curr, Next, T: CompType>(
+    pub fn mk_field_expr<'vir, Curr, Next>(
         &'vir self,
         recv: ExprGen<'vir, Curr, Next>,
         field: Field<'vir>,
@@ -520,12 +518,12 @@ impl<'tcx> VirCtxt<'tcx> {
 
     pub fn mk_function<'vir, Curr, Next>(
         &'vir self,
-        ident: FunctionIdn<'vir, A, T>,
-        args: A::Locals<'_, 'vir>,
-        pres: &'vir [ExprGenBool<'vir, Curr, Next>],
-        posts: &'vir [ExprGenBool<'vir, Curr, Next>],
-        decreases: Option<DecreasesGen<'vir, Curr, Next>>,
-        expr: Option<ExprGen<'vir, Curr, Next, T>>,
+        name: &'vir str, // TODO: identifiers
+        args: &'vir [LocalDecl<'vir>],
+        ret: Type<'vir>,
+        pres: &'vir [ExprGen<'vir, Curr, Next>],
+        posts: &'vir [ExprGen<'vir, Curr, Next>],
+        expr: Option<ExprGen<'vir, Curr, Next>>,
     ) -> FunctionGen<'vir, Curr, Next> {
         // TODO: Typecheck pre and post conditions
         if let Some(body) = expr {
@@ -553,8 +551,7 @@ impl<'tcx> VirCtxt<'tcx> {
             ret,
             pres,
             posts,
-            decreases: decreases.unwrap_or(&DecreasesGenData::None),
-            expr: expr.map(|e| e.as_dyn()),
+            expr,
         })
     }
 
