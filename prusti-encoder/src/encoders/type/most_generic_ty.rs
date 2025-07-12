@@ -3,7 +3,7 @@ use prusti_rustc_interface::{
     middle::ty::{self, TyKind},
     span::symbol,
 };
-use vir::{DomainParamData, NullaryArityAny};
+
 /// The "most generic" version of a type is one that uses "identity
 /// substitutions" for all type parameters. For example, the most generic
 /// version of `Vec<u32>` is `Vec<T>`, the most generic version of
@@ -17,9 +17,9 @@ impl<'tcx: 'vir, 'vir> MostGenericTy<'tcx> {
     pub fn get_vir_domain_ident(
         &self,
         vcx: &'vir vir::VirCtxt<'tcx>,
-    ) -> vir::DomainIdent<'vir, NullaryArityAny<'vir, DomainParamData<'vir>>> {
+    ) -> vir::DomainIdn<'vir, vir::Snap> {
         let base_name = self.get_vir_base_name(vcx);
-        vir::DomainIdent::nullary(vir::vir_format_identifier!(vcx, "s_{base_name}"))
+        vir::DomainIdn::new(vir::vir_format_identifier!(vcx, "s_{base_name}"))
     }
 }
 
@@ -69,7 +69,7 @@ impl<'tcx> MostGenericTy<'tcx> {
         matches!(self.kind(), TyKind::Param(_))
     }
 
-    pub fn kind(&self) -> &TyKind<'tcx> {
+    pub fn kind(&self) -> &'tcx TyKind<'tcx> {
         self.0.kind()
     }
 
@@ -105,15 +105,23 @@ impl<'tcx> MostGenericTy<'tcx> {
             TyKind::Ref(_, inner, ty::Mutability::Not) => vec![as_param_ty(*inner)],
             TyKind::Ref(_, _, ty::Mutability::Mut) => vec![],
             TyKind::RawPtr(inner, _) => vec![as_param_ty(*inner)],
+            TyKind::Param(p) => vec![p],
+            TyKind::Closure(_, args) => {
+                args.as_closure()
+                    .parent_args()
+                    .iter()
+                    .copied()
+                    .filter_map(ty::GenericArg::as_type)
+                    .map(as_param_ty)
+                    .collect()
+            }
             TyKind::Bool
             | TyKind::Char
             | TyKind::Float(_)
             | TyKind::Int(_)
             | TyKind::Never
-            | TyKind::Param(_)
             | TyKind::Uint(_)
             | TyKind::Str
-            | TyKind::Closure(..)
             | TyKind::FnPtr(..) => Vec::new(),
             other => todo!("generics for {:?}", other),
         }
@@ -191,6 +199,15 @@ pub fn extract_type_params<'tcx>(
             (MostGenericTy(ty), vec![inner])
         }
         TyKind::Param(_) => (MostGenericTy(to_placeholder(tcx, None)), Vec::new()),
+        TyKind::Closure(_, args) => {
+            let args = args.as_closure()
+                .parent_args()
+                .iter()
+                .copied()
+                .filter_map(ty::GenericArg::as_type)
+                .collect();
+            (MostGenericTy(ty), args)
+        }
         TyKind::Bool
         | TyKind::Char
         | TyKind::Int(_)
@@ -198,7 +215,6 @@ pub fn extract_type_params<'tcx>(
         | TyKind::Float(_)
         | TyKind::Never
         | TyKind::Str
-        | TyKind::Closure(..)
         | TyKind::FnPtr(..) => (MostGenericTy(ty), Vec::new()),
         _ => todo!("extract_type_params for {:?}", ty),
     }
