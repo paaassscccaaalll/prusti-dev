@@ -44,8 +44,8 @@ pub(crate) fn domain<'vir>(
     });
     builder.axiom("ref_immutable_cons_typeof", vir::expr! {
         forall s: [builder.self_type()] :: 
-            {[generic_enc.param_type_function]([value_ident](s))} 
-            ([generic_enc.param_type_function]([value_ident](s))) == ([ty_type_func.ty_param_accessors[0]]([output_ref.typeof_function](s)))
+            {[generic_enc.param_type_function](([value_ident](s)) as PSnap)} 
+            ([generic_enc.param_type_function](([value_ident](s)) as PSnap)) == ([ty_type_func.ty_param_accessors[0]]([output_ref.typeof_function]((s) as Snap)))
     });
     // builder.axiom("cons", vir::expr! {
     //     forall s: [builder.self_type()] :: {[deref_ident](s)} ([cons_ident]([deref_ident](s))) == (s)
